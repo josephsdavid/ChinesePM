@@ -2,10 +2,10 @@
 
 ## To do list
 
--[x] preprocessing
--[ ] EDA
--[ ] Univariate analysis
--[ ] Multivariate analysis
--[ ] multivar with clustering
--[ ] uneven sampling analysis
--[ ] write paper
+- [x] preprocessing
+- [ ] EDA
+- [ ] Univariate analysis
+- [ ] Multivariate analysis
+- [ ] multivar with clustering
+- [ ] uneven sampling analysis
+- [ ] write paper
