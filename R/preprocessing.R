@@ -4,9 +4,11 @@ library(rlist) # for list manipulations
 library(pipeR) # fast, dumb pipes
 library(imputeTS) # to impute NAs
 library(pander) # so i can read the output
+library(foreach) # go fast
+library(doParallel) # go fast
 
 # Data import
-datadir <- "../data/"
+# datadir <- "../data/"
 # function which imports the data as a list, then fixes up the names to be nice
 import <- function(path){
 	files <- list.files(path)
@@ -18,7 +20,7 @@ import <- function(path){
 	names(out) <- fnames
 	out
 }
-datas <- import(datadir)
+# datas <- import(datadir)
 # count the nas of a data frame
 count_nas_single <- function(df){
 	sapply(df, function(x) sum(is.na(x)/length(x)))
@@ -172,7 +174,7 @@ count_nas <- function(xs){
 tots <- function(v){
 	ts(v, frequency = 365*24)
 }
-tots(datas[[1]]$PM_US) %>>% tail
+# tots(datas[[1]]$PM_US) %>>% tail
 
 # convert a data frame into a list of time series objects, given column names
 totslist <- function(df){
@@ -198,11 +200,43 @@ totslist <- function(df){
 	
 
 }
-datas[[1]] %>>% totsdf %>>%str
-datas[[1]] %>>% totslist%>>%str
+# datas[[1]] %>>% totsdf %>>%str
+# datas[[1]] %>>% totslist%>>%str
 totsall <- function(xs){
 	lapply(xs, totslist)
 }
-str(datas[[1]]$PM_US)
-datas %>>% totsall -> datas
+# str(datas[[1]]$PM_US)
+# datas %>>% totsall -> datas
 
+# impute NAs of a single list with spline interpolation
+# try na.ma but dont fail on error, instead just do standard type checking
+# if the output is a time series, impute the NAs, otherwise do nothing
+imp_test <- function(v){
+	out <- try(na.interpolation(v, "spline"))
+	ifelse(
+	       is.ts(out),
+	       return(out),
+	       return(v)
+	)
+}
+# impute the NAs of a single list
+impute <- function(xs){
+	foreach(i = 1:length(xs),
+		.final = function(x){
+			setNames(x, names(xs))
+		}) %dopar% 
+		imp_test(xs[[i]])
+}
+# cl <- makeCluster(11, type = "FORK")
+# registerDoParallel(cl)
+# na.ma(datas[[1]][["PM_"]], k=200)
+# na.interpolation(datas[[1]][["PM_Dongsi"]], "spline") %>>% head
+# impute(datas[[1]]) %>>% names
+
+# impute NAs of the parent list
+impute_list <- function(xs){
+	lapply(xs, impute)
+}
+
+# final preprocessing function:
+preprocess <- Compose(import, totsall, impute_list)
