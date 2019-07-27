@@ -245,7 +245,7 @@ to_hash <- function(xs){
 }
 # final preprocessing function:
 
-preprocess_noisy <- Compose(import, totsall, impute_list, to_hash)
+preprocess <- Compose(import, totsall, impute_list, to_hash)
 
 
 
