@@ -47,6 +47,7 @@ in
       texlive.combined.scheme-full
       python37Packages.pandas
       python37Packages.IMAPClient
+      unar # support free software duh
     ];
    shellHook = ''
 #     echo "#!/usr/bin/env Rscript" > libs.R

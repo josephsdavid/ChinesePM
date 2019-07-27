@@ -93,9 +93,11 @@ diff2 <- timediff(train_clean[[1]])
 hist(as.numeric(diff2))
 pander(table(as.numeric(diff2)))
 test_clean <- collapse_dates(test, "2 hours")
+str(test_clean)
 diff3 <- as.numeric(timediff(test_clean[[1]]))
 hist(diff3)
 pander(table(diff3))
+save(test_clean, train_clean, file = "../data/clean.Rda")
 ```
 
 I think we can live with this
