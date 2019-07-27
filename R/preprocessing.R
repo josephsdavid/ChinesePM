@@ -238,5 +238,10 @@ impute_list <- function(xs){
 	lapply(xs, impute)
 }
 
+# make a fast hash table
+to_hash <- function(xs){
+	list2env(xs, envir = NULL, hash = TRUE)
+}
 # final preprocessing function:
-preprocess <- Compose(import, totsall, impute_list)
+
+preprocess <- Compose(import, totsall, impute_list, to_hash)
