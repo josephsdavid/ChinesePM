@@ -48,6 +48,7 @@ in
       python37Packages.pandas
       python37Packages.IMAPClient
       unar # support free software duh
+      rPackages.imputeTS
     ];
    shellHook = ''
 #     echo "#!/usr/bin/env Rscript" > libs.R
