@@ -249,6 +249,8 @@ preprocess <- Compose(import, totsall, impute_list, to_hash)
 
 
 
+# Not used:::
+
 sum_or_combine <- function(x){
 	ifelse(
 	       is.numeric(x),
