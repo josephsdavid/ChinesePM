@@ -4,8 +4,10 @@
 
 - [x] preprocessing
 - [ ] EDA
-- [ ] Univariate analysis
+- [ ] Classical Univariate analysis
+- [ ] Multiseasonal Univariate analysis 
 - [ ] Multivariate analysis
-- [ ] multivar with clustering
-- [ ] uneven sampling analysis
+- [ ] Multiseasonal Univariate analysis
+- [ ] multivar/ensemble with clustering
+- [ ] Ensemble forecast
 - [ ] write paper
