@@ -27,6 +27,7 @@ in
 #      rPackages.dtwclust
       rPackages.dplyr
       rPackages.purrr
+      rPackages.cowplot
       rPackages.quantmod
       rPackages.magrittr
       rPackages.functional
@@ -49,6 +50,21 @@ in
       python37Packages.IMAPClient
       unar # support free software duh
       rPackages.imputeTS
+      rPackages.tensorflow
+      rPackages.keras
+      rPackages.FNN
+      rPackages.fastNaiveBayes
+      python37Packages.tensorflow
+      python37Packages.Keras
+      rPackages.forcats
+      rPackages.timetk
+      rPackages.tidyquant
+      rPackages.tibbletime
+      rPackages.recipes
+      rPackages.rsample
+      rPackages.yardstick
+      rPackages.tfruns
+
     ];
    shellHook = ''
 #     echo "#!/usr/bin/env Rscript" > libs.R
