@@ -64,7 +64,11 @@ in
       rPackages.rsample
       rPackages.yardstick
       rPackages.tfruns
-
+      python37Packages.pip
+      python37Packages.numpy
+      python37Packages.pandas
+      python37Packages.matplotlib
+      python37Packages.mxnet
     ];
    shellHook = ''
 #     echo "#!/usr/bin/env Rscript" > libs.R

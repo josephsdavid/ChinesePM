@@ -9,9 +9,12 @@ names(china)
 
 beij <- china$BeijingPM_
 
-train <- beij$PM_US %>>% tsclean %>>% abs %>>% 
-       	window(end=6) %>>%
-	msts(seasonal.periods = c(24, (24*7), (24*365.25)))
+bj <- beij$PM_US %>>% tsclean %>>% abs %>>% 
+  msts(seasonal.periods = c(24, (24*7), (24*365.25)))
+
+train <-  window(bj, end = 6)
+
+
 
 p <- autoplot(bj,ylab = "ppm" , xlab = "hour") 
 bj %>>% mstl %>>% autoplot
@@ -54,13 +57,13 @@ plot(bjpred, include = 365)
 # Now lets try out harmonic regression
 
 # bjtest <- auto.arima(train, seasonal = F, lambda = 0, 
-                      xreg = fourier(train, K = rep(10,3)))
+#                      xreg = fourier(train, K = rep(10,3)))
 # save(bjtest, file = "bjtest.Rda")
 load("bjharm.Rda")
 bjfore <- forecast(
-		   bjharm,
-		   xreg = fourier(bj, K = rep(10,3)),
-		   h = 365*24*3
+                   bjharm,
+                   xreg = fourier(bj, K = rep(10,3)),
+                   h = 365*24*3
 )
 bjfore %>>% fitted %>>% str
 results <- fitted(bjfore)
@@ -76,33 +79,57 @@ ggplot(df) + geom_line(aes(x = t, y = ppm, color = type)) + scale_color_few(pale
 # todo: ASE, combo forecasts
 test <- window(bj, start = 6)
 length(test)
+load("bjtest.Rda")
 bjfor.test <- Arima(test, model = bjtest, 
-		    xreg = fourier(
-				   test,
-				   K = rep(10,3)
-				   ))
+                    xreg = fourier(
+                                   test,
+                                   K = rep(10,3)
+                                   ))
+
 getASE(bjfor.test)
 # [1] 416.4127
 bjpredt <- bjfore %>>% forecast(h = length(test))
 str(fitted( bjpredt ))
 fitted(bjpredt) %>>%
-	autoplot + autolayer(test)
+  autoplot + autolayer(test)
 
 trainf <- data.frame(ppm = train, type = "actual")
-predf <- data.frame(ppm = as.numeric( fitted(bjfor.test) ), type = "predicted",
-t = seq_along(fitted(bjfor.test)))
-testf <- data.frame(ppm = as.numeric(test), type = "actual",t = seq_along(test))
+predf <- data.frame(ppm = as.numeric( fitted(bjfor.test) ), 
+                    type = "predicted",
+                    t = seq_along(fitted(bjfor.test)))
 
-l <- list(testf, predf)
+testf <- data.frame(ppm = as.numeric(test), 
+                    type = "actual",
+                    t = seq_along(test))
+
+predVact <- list(testf, predf)
 p <- ggplot() + theme_economist() + scale_color_few(palette = "Dark" )
 doplot <- function(df){
-	p <<- p + geom_line(data = df,
-			    aes(
-				x = t,
-				y = ppm,
-				color = type
-				))
+  p <<- p + geom_line(data = df,
+                      aes(
+                          x = t,
+                          y = ppm,
+                          color = type
+                          ))
 }
-out <- lapply(l, doplot)
+out <- lapply(predVact, doplot)
+
 
 out
+# testPredPlot <- function(xs){
+# 	p <- ggplot() + theme_economist() + scale_color_few(palette = "Dark" )
+# 
+# 	doplot <- function(df){
+# 		p <<- p + geom_line(data = df,
+# 				    aes(
+# 					x = t,
+# 					y = ppm,
+# 					color = type
+# 					))
+# 	}
+# 	lapply(xs, doplot)
+# 
+# }
+
+
+testPredPlot(predVact)
