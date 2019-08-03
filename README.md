@@ -3,8 +3,8 @@
 ## To do list
 
 - [x] preprocessing
-- [ ] EDA
-- [ ] Classical Univariate analysis
+- [x] EDA
+- [x] Classical Univariate analysis
 - [ ] Multiseasonal Univariate analysis 
 - [ ] Multivariate analysis
 - [ ] Multiseasonal Univariate analysis
