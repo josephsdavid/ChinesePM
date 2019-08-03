@@ -36,7 +36,7 @@ cleanseas <- function(xs) {
   xs %>>% clean %>>% abs %>>% to_season
 }
 
-
+# resample a time series
 resample <- function(xs){
   xs %>>% cleandays %>>% window(end = 6) -> day
   xs %>>% cleanweeks %>>% window(end = 6) -> week
@@ -78,7 +78,59 @@ testPredPlot <- function(xs){
                             color = type
                             ))
   }
-  lapply(xs, doplot)
+  out <- lapply(xs, doplot)
+  out[[2]]
+
 
 }
 
+# some metrics, including a made up one
+ASE <- function(predicted, actual){
+  mean((actual -predicted)^2)
+}
+
+MAPE <- function(predicted, actual){
+  100*mean(abs((actual-predicted)/actual))
+}
+
+checkConfint <- function(upper,lower, actual){
+  (actual < lower) | (actual > upper)
+}
+
+confScore <- function(upper, lower, actual){
+  rawScores <- ifelse(
+    checkConfint(upper,lower,actual),
+    1,
+    0
+  )
+  sum(rawScores)
+}
+
+# generic for getting scores of a model
+scores <- function(obj){
+  UseMethod("scores")
+}
+
+# coerce something into a wge object
+as.wge <- function(x) structure(x,class = "wge")
+
+# method for getting scores of a wge object
+scores.wge <- function(xs){
+  mape <- MAPE(xs$f,test)
+  ase  <- ASE(xs$f,test)
+  confs <- confScore(xs$ul, xs$ll,test)
+  c("MAPE" = mape, "ASE" = ase, "Conf.Score" = confs)
+}
+
+
+# autoplot method for wge objects
+autoplot.wge <- function(obj){
+  testdf <- data.frame(type = "actual", 
+                       t = seq_along(test), 
+                       ppm = as.numeric(test))
+  preddf <- data.frame(type = "predicted", 
+                       t = seq_along(obj$f), 
+                       ppm = as.numeric( obj$f ))
+  dfl <- list(testdf,preddf)
+  testPredPlot(dfl)
+}

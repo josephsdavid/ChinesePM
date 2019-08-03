@@ -1,3 +1,6 @@
+library(ggplot2)
+library(ggthemes)
+library(tswgewrapped)
 source("../../R/preprocessing.R")
 source("../../R/helpers.R")
 # data import
