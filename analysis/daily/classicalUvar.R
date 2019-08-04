@@ -79,6 +79,8 @@ trendCast <- forecast(type = aruma,
 
 # Now let us assess our models
 
+
+
 casts <- list("arma" = armaCast, "seasonal" = seaCast, "arima" = trendCast)
 
 pander( lapply(casts, scores) )

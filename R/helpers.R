@@ -1,3 +1,8 @@
+# fun little beep function
+beep <- function(f){
+  out <- f; beepr::beep(0); out
+}
+
 # fix up outliers
 clean <- forecast::tsclean
 
@@ -34,6 +39,38 @@ cleanmonths <- function(xs) {
 }
 cleanseas <- function(xs) {
   xs %>>% clean %>>% abs %>>% to_season
+}
+Mode <- function(x) {
+    ux <- unique(x)
+    ux[which.max(tabulate(match(x, ux)))]
+}
+to_dailyNots <-   function(xs){
+    out <- unname(tapply(
+                         xs,
+                         (seq_along(xs)-1) %/% 24,
+                         Mode
+                         ))
+    out[1:1826]
+  }
+
+# hourly ts to daily df
+dlist <- function(xs){
+  xs %>>%purrr::keep(is.ts) -> tsbj
+  xs %>>% purrr::discard(is.ts) -> tsnobj
+  out <- append(lapply(tsbj,function(x) window(cleandays(x), end = 6)), lapply(tsnobj,to_dailyNots)) 
+  as.data.frame(out)
+}
+# daily train test split
+
+dfsplit <- function(df,n = 5){
+  index <- length(window(df[[1]], end = n))
+  tsdf <- df %>% purrr::keep(is.ts)
+  nodf <- df %>% purrr::discard(is.ts)
+  outs <- lapply(tsdf, function(x) window(x,end = n))
+  outn <- nodf[1:index,]
+  train<<-as.data.frame(append(outs,outn))
+  tests <- lapply(tsdf, function(x) window(x, start = n))
+  test <<- as.data.frame(append(tests, nodf[(index):nrow(nodf),]))
 }
 
 # resample a time series
@@ -133,4 +170,27 @@ autoplot.wge <- function(obj){
                        ppm = as.numeric( obj$f ))
   dfl <- list(testdf,preddf)
   testPredPlot(dfl)
+}
+
+
+# forecast methods
+
+
+as.fore <- function(x) structure(x, class = "fore")
+autoplot.fore <- function(obj){
+  testdf <- data.frame(type = "actual", 
+                       t = seq_along(test), 
+                       ppm = as.numeric(test))
+  preddf <- data.frame(type = "predicted", 
+                       t = seq_along(test), 
+                       ppm = as.numeric( obj$fitted[1:length(test)] ))
+  dfl <- list(testdf,preddf)
+  testPredPlot(dfl)
+}
+
+scores.fore <- function(obj){
+  mape <- MAPE(obj$fitted[1:length(test)], test)
+  ase <- ASE(obj$fitted, test)
+  confs <- confScore(obj$upper[1:length(test)], obj$lower[1:length(test)], test)
+  c("MAPE" = mape, "ASE" = ase, "Conf.Score" = confs)
 }
