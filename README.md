@@ -5,9 +5,8 @@
 - [x] preprocessing
 - [x] EDA
 - [x] Classical Univariate analysis
-- [ ] Multiseasonal Univariate analysis 
+- [x] Multiseasonal Univariate analysis 
 - [ ] Multivariate analysis
-- [ ] Multiseasonal Univariate analysis
-- [ ] multivar/ensemble with clustering
+- [x] clustering
 - [ ] Ensemble forecast
 - [ ] write paper
