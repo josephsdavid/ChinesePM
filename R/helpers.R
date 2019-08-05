@@ -194,3 +194,19 @@ scores.fore <- function(obj){
   confs <- confScore(obj$upper[1:length(test)], obj$lower[1:length(test)], test)
   c("MAPE" = mape, "ASE" = ase, "Conf.Score" = confs)
 }
+
+
+# new forecasts using different objects (so we can predict off of new data)
+
+newFore <- function(...){
+  UseMethod("newFore")
+}
+newFore.Arima <- function(obj, newdata, xreg = NULL, h = 1){
+  refit <- Arima(newdata, model = obj, xreg = xreg)
+  forecast(refit, h = h, xreg = xreg)
+}
+
+newFore.bats <- function(obj, newdata, h = 1){
+  refit <- tbats( model = obj,y  = newdata)
+  forecast(refit,  h)
+}
