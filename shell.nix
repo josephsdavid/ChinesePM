@@ -15,7 +15,8 @@ in
        rPackages.Mcomp
        rPackages.ggplot2
        rPackages.data_table
-      rPackages.knitr
+       rPackages.knitr
+       rPackages.latticeExtra
       rPackages.httpuv
       rPackages.reticulate
       rPackages.orcutt

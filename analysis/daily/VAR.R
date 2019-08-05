@@ -1,3 +1,7 @@
+library(doParallel)
+library(foreach)
+library(dplyr)
+library(latticeExtra)
 library(ggthemes)
 library(ggplot2)
 library(vars)
@@ -51,8 +55,6 @@ ps <- c(8,3,1)
 szn <- c(NULL, 365)
 init <- list(ps = ps, types = types, ics = ics, szn = szn)
 grid <- expand.grid(init, stringsAsFactors = FALSE)
-library(doParallel)
-library(foreach)
 # grid search of VAR
 workers <- makeCluster(11L)
 invisible(clusterEvalQ(workers, library(vars)))
@@ -60,15 +62,19 @@ registerDoParallel(workers)
 
 gridSearch <- foreach(i = 1:nrow(grid), .combine = rbind) %dopar% {
   model <- VAR(traints,p = grid[i,1], type = grid[i,2], ic = grid[i,3], season = grid[i,4])
-  preds <- predict(model, n.ahead = 365)
+  preds <- predict(model, n.ahead = 366)
   pred <- preds$fcst$PM_US.Post[,1]
   ASE <- mean( (test$PM_US.Post-pred)^2 )
   c(ASE = ASE, p = grid[i,1], type = grid[i,2], ic = grid[i,3], season = grid[i,4])
-  }
+}
+load("varsear.Rda")
+gridSearch %>% as_tibble -> gridSearch
+gridSearch$ASE <- as.numeric(gridSearch$ASE)
+gridSearch[2:4] <- lapply(gridSearch[2:4], factor)
+gridSearch
 stopCluster(workers)
 registerDoSEQ()
-library(dplyr)
-gridSearch %>% as.data.frame %>% arrange(ASE) %>% head
+gridSearch %>% arrange(ASE) 
 #                ASE p type  ic season
 # 1 3748040.22781357 3 none AIC    365
 # 2 3748040.22781357 3 none  HQ    365
@@ -76,6 +82,22 @@ gridSearch %>% as.data.frame %>% arrange(ASE) %>% head
 # 4 3748040.22781357 3 none FPE    365
 # 5 3752913.51274325 1 none AIC    365
 # 6 3752913.51274325 1 none  HQ    365
+gridV <-  cloud(ASE ~ p + type, 
+       gridSearch,
+       panel.3d.cloud = panel.3dbars, 
+       scales = list(arrows = F, col = 1), 
+       xbase= 0.2, ybase = 0.2,  pretty = T,
+       col.facet = level.colors(gridSearch$ASE, 
+          at = do.breaks(range(gridSearch$ASE), 20),
+          col.regions = terrain.colors),
+       colorkey = list(
+                       col = terrain.colors, 
+                       at = do.breaks(range(gridSearch$ASE), 
+                                      20)),
+       screen = list( z = 40, x = -30 )
+ )
+
+ggplot(data = gridSearch) + geom_bar(stat = "identity",aes(x = p, y = ASE, fill = type)) + facet_wrap(. ~ season)
 var1 <- VAR(traints, p = 3, type = "none", ic = "AIC", season = 365)
 preds <- predict(var1, n.ahead = 366)
 pred <- preds$fcst$PM_US.Post[,1]
@@ -151,3 +173,4 @@ autoplot.fore
 vpred <- as.var(preds)
 autoplot(vpred)
 scores(vpred)
+
