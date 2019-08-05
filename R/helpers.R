@@ -210,3 +210,21 @@ newFore.bats <- function(obj, newdata, h = 1){
   refit <- tbats( model = obj,y  = newdata)
   forecast(refit,  h)
 }
+
+
+autoplot.var <- function(obj){
+  testdf <- data.frame(type = "actual", 
+                       t = seq_along(test$PM_US.Post), 
+                       ppm = as.numeric(test$PM_US.Post))
+  preddf <- data.frame(type = "predicted", 
+                       t = seq_along(test$PM_US.Post), 
+                       ppm = ( obj$fcst$PM_US.Post[,1]))
+  dfl <- list(testdf,preddf)
+  testPredPlot(dfl)
+}
+scores.var <- function(obj){
+  mape <- MAPE(obj$fcst$PM[,1], test$PM_US)
+  ase <- ASE(obj$fcst$PM[,1], test$PM_US)
+  c("MAPE" = mape, "ASE" = ase)
+}
+as.var <- function(x) structure(x, class = "var")

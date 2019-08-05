@@ -63,11 +63,91 @@ gridSearch <- foreach(i = 1:nrow(grid), .combine = rbind) %dopar% {
   preds <- predict(model, n.ahead = 365)
   pred <- preds$fcst$PM_US.Post[,1]
   ASE <- mean( (test$PM_US.Post-pred)^2 )
-  c(ASE = ASE, p = grid[i,1], type = grid[i,2], ic = grid[i,3])
+  c(ASE = ASE, p = grid[i,1], type = grid[i,2], ic = grid[i,3], season = grid[i,4])
   }
 stopCluster(workers)
 registerDoSEQ()
 library(dplyr)
 gridSearch %>% as.data.frame %>% arrange(ASE) %>% head
+#                ASE p type  ic season
+# 1 3748040.22781357 3 none AIC    365
+# 2 3748040.22781357 3 none  HQ    365
+# 3 3748040.22781357 3 none  SC    365
+# 4 3748040.22781357 3 none FPE    365
+# 5 3752913.51274325 1 none AIC    365
+# 6 3752913.51274325 1 none  HQ    365
+var1 <- VAR(traints, p = 3, type = "none", ic = "AIC", season = 365)
+preds <- predict(var1, n.ahead = 366)
+pred <- preds$fcst$PM_US.Post[,1]
+mean( (test$PM_US.Post-pred)^2 )
+# [1] 3748146
 
+plot(preds)
+lm(data = traints, PM_US.Post ~.) -> thelm
+summary(thelm)
+# 
+# Call:
+# lm(formula = PM_US.Post ~ ., data = traints)
+# 
+# Residuals:
+#     Min      1Q  Median      3Q     Max 
+# -3605.8  -904.0  -208.8   606.5  9556.9 
+# 
+# Coefficients:
+#                 Estimate Std. Error t value Pr(>|t|)    
+# (Intercept)    4.461e+04  7.021e+03   6.354 2.80e-10 ***
+# DEWP          -9.597e-01  2.643e-01  -3.632 0.000291 ***
+# HUMI           1.908e+00  9.242e-02  20.645  < 2e-16 ***
+# PRES          -1.757e+00  2.839e-01  -6.189 7.88e-10 ***
+# TEMP          -3.425e+00  3.395e-01 -10.088  < 2e-16 ***
+# Iws           -1.151e+00  1.656e-01  -6.948 5.59e-12 ***
+# precipitation -1.192e+20  5.488e+19  -2.173 0.029974 *  
+# Iprec         -5.304e+19  3.843e+19  -1.380 0.167758    
+# ---
+# Signif. codes:  0 ‘***’ 0.001 ‘**’ 0.01 ‘*’ 0.05 ‘.’ 0.1 ‘ ’ 1
+# 
+# Residual standard error: 1454 on 1453 degrees of freedom
+# Multiple R-squared:  0.3653,	Adjusted R-squared:  0.3622 
+# F-statistic: 119.4 on 7 and 1453 DF,  p-value: < 2.2e-16
+# 
 
+traints %>% select(PM_US.Post, HUMI, DEWP, TEMP, precipitation, PRES, Iws) -> trainsimp
+var2 <- VAR(trainsimp, p = 3, type = "none", ic = "AIC", season = 365)
+preds <- predict(var2, n.ahead = 366)
+pred <- preds$fcst$PM_US.Post[,1]
+mean( (test$PM_US.Post-pred)^2 )
+# [1] 3747685
+
+traints %>% select(PM_US.Post, HUMI,  TEMP, precipitation,  PRES, Iws) -> trainsimp2
+
+var3 <- VAR(trainsimp2, p = 3, type = "none", ic = "AIC", season = 365)
+preds <- predict(var3, n.ahead = 366)
+pred <- preds$fcst$PM_US.Post[,1]
+mean( (test$PM_US.Post-pred)^2 )
+# [1] 3746216
+
+traints %>% select(PM_US.Post, HUMI,  TEMP,   PRES, Iws) -> trainsimp3
+
+var4 <- VAR(trainsimp3, p = 3, type = "none", ic = "AIC", season = 365)
+preds <- predict(var4, n.ahead = 366)
+pred <- preds$fcst$PM_US.Post[,1]
+mean( (test$PM_US.Post-pred)^2 )
+# [1] 3745787
+plot(preds)
+# NULL
+
+autoplot.fore
+# function(obj){
+#   testdf <- data.frame(type = "actual", 
+#                        t = seq_along(test), 
+#                        ppm = as.numeric(test))
+#   preddf <- data.frame(type = "predicted", 
+#                        t = seq_along(test), 
+#                        ppm = as.numeric( obj$fitted[1:length(test)] ))
+#   dfl <- list(testdf,preddf)
+#   testPredPlot(dfl)
+# }
+
+vpred <- as.var(preds)
+autoplot(vpred)
+scores(vpred)

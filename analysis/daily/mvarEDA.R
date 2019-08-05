@@ -106,10 +106,11 @@ plot_vs_response <- function(x){
   lines(train[[x]][j],lw1$fitted[j],col="red",lwd=3)
 }
 
-train %>% keep(is.numeric) %>% names -> numNames
+train %>% purrr::keep(is.numeric) %>% names -> numNames
 numNames <- numNames[-c(1:4, 11:17)] 
 length(numNames)
-par(mfrow = c(3,2))
+# [1] 8
+par(mfrow = c(3,3))
 lapply(numNames, plot_vs_response)
 ppm <- train$PM_US.Post
 ccfplot <- function(x){
