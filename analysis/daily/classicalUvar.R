@@ -52,13 +52,28 @@ plot_res(estTrend$res)
 
 # make some forecasts
 
+armaval <- forecast(type = aruma, 
+                     x = window(train, end = 4), 
+                     phi = estARMA$phi,
+                     theta = estARMA$theta, 
+                     n.ahead = length(test)) %>>% as.wge
+armaval <- armaval$f
+
 armaCast <- forecast(type = aruma, 
                      x = train, 
                      phi = estARMA$phi,
                      theta = estARMA$theta, 
                      n.ahead = length(test)) %>>% as.wge
-
+armatest <- armaCast$f
 # this is crap, but for short term forecasts maybe cool
+
+seaval <- forecast(type = aruma, 
+                    x = window(train, end = 4), 
+                    phi = estSeas$phi, 
+                    theta = estSeas$theta, 
+                    s = 365, 
+                    n.ahead = length(test)) %>>% as.wge
+seaval <- seaval$f
 
 seaCast <- forecast(type = aruma, 
                     x = train, 
@@ -66,20 +81,27 @@ seaCast <- forecast(type = aruma,
                     theta = estSeas$theta, 
                     s = 365, 
                     n.ahead = length(test)) %>>% as.wge
-
+seatest <- seaCast$f
 
 # now we do trend, which should be a pretty bad forecast as well
 
+trendval <- forecast(type = aruma, 
+                    x = window(train, end = 4), 
+                    phi = estTrend$phi, 
+                    theta = estTrend$theta, 
+                    d = 1, 
+                    n.ahead = length(test)) %>>% as.wge
+trendval <- trendval$f
 trendCast <- forecast(type = aruma, 
                     x = train, 
                     phi = estTrend$phi, 
                     theta = estTrend$theta, 
                     d = 1, 
                     n.ahead = length(test)) %>>% as.wge
-
+trendtest <- trendCast$f
 # Now let us assess our models
 
-
+save(armaval,armatest,seaval,seatest,trendval,trendtest, file ="classical.Rda")
 
 casts <- list("arma" = armaCast, "seasonal" = seaCast, "arima" = trendCast)
 

@@ -10,6 +10,15 @@ in
        rPackages.tidyverse
        rstudio
        rPackages.rmarkdown
+       rPackages.plotrix
+       rPackages.tree
+       rPackages.party
+       rPackages.randomForest
+       rPackages.opera
+       rPackages.RSNNS
+       rPackages.plyr
+       rPackages.neuralnet
+       rPackages.caret
        rPackages.lomb
        rPackages.pander
        rPackages.Mcomp
@@ -56,6 +65,7 @@ in
       rPackages.FNN
       rPackages.fastNaiveBayes
       python37Packages.tensorflow
+      python37Packages.tensorflow-tensorboard
       python37Packages.Keras
       rPackages.forcats
       rPackages.timetk

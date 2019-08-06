@@ -22,7 +22,7 @@ bjbats <- tbats(train, use.parallel = TRUE, num.cores=11)
 save(bjbats, file = "tbats.Rda")
 load("tbats.Rda")
 
-batF <- newFore(obj = bjbats,  test, h = 365)
+batF <- newFore(obj = bjbats,  test, h = 366)
 autoplot(batF)
 forbats <- as.fore(batF)
 options(scipen = 999)

@@ -228,3 +228,31 @@ scores.var <- function(obj){
   c("MAPE" = mape, "ASE" = ase)
 }
 as.var <- function(x) structure(x, class = "var")
+
+
+as.nfor <- function(x) structure(x, class = "nfor")
+scores.nfor <- function(obj){
+  mape <- MAPE(obj$mean[1:length(test[[1]])], test[[1]])
+  ase <- ASE(obj$mean, test[[1]])
+  c("MAPE" = mape, "ASE" = ase)
+}
+
+
+autoplot.nfor <- function(obj){
+  testdf <- data.frame(type = "actual", 
+                       t = seq_along(test[[1]]), 
+                       ppm = as.numeric(test[[1]]))
+  preddf <- data.frame(type = "predicted", 
+                       t = seq_along(test[[1]]), 
+                       ppm = as.numeric( obj$mean ))
+  dfl <- list(testdf,preddf)
+  testPredPlot(dfl)
+}
+
+
+scores.bag <- function(obj){
+  ase <- ASE(obj, bagtest[[1]])
+  mape <- MAPE(obj, bagtest[[1]])
+  c("ASE" = ase, "MAPE" = mape)
+}
+as.bag <- function(x) structure(x, class = "bag")
