@@ -6,7 +6,10 @@
 - [x] EDA
 - [x] Classical Univariate analysis
 - [x] Multiseasonal Univariate analysis 
-- [ ] Multivariate analysis
+- [x] Multivariate analysis
 - [x] clustering
-- [ ] Ensemble forecast
+- [x] LSTM
+- [x] ANN
+- [x] prophet
+- [x] Ensemble forecast
 - [ ] write paper
