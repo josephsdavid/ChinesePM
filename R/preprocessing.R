@@ -8,7 +8,7 @@ library(foreach) # go fast
 library(doParallel) # go fast
 
 # Data import
-  datadir <- "../data/"
+#  datadir <- "../data/"
 # function which imports the data as a list, then fixes up the names to be nice
 import <- function(path){
   files <- list.files(path)

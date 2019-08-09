@@ -9,6 +9,12 @@ in
        python37
        rPackages.tidyverse
        rstudio
+       rPackages.timetk
+       rPackages.tidyquant
+       rPackages.recipes
+       rPackages.rsample
+       rPackages.yardstick
+       rPackages.glue
        rPackages.rmarkdown
        rPackages.plotrix
        rPackages.tree
@@ -34,7 +40,6 @@ in
       rPackages.doParallel
       rPackages.foreach
       rPackages.memoise
-#      rPackages.dtwclust
       rPackages.dplyr
       rPackages.purrr
       rPackages.cowplot

@@ -6,11 +6,7 @@ myPackages = installed.packages()
 cranPackages <- c('nnfor', 'dtwclust')
 to.install <- setdiff(cranPackages, myPackages[,1])
 if(length(to.install)>0) install.packages(to.install)
-if(!('reprtree' %in% installed.packages())){
-  install_github('araastat/reprtree')
-}
 
-#if(!('tswgewrapped' %in% installed.packages())){
-#  install_github('josephsdavid/tswgewrapped')
-#}
-# remotes::install_github("josephsdavid/tswgewrapped")
+if(!('tswgewrapped' %in% installed.packages())){
+  install_github('josephsdavid/tswgewrapped')
+}

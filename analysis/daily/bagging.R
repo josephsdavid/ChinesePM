@@ -1,4 +1,5 @@
 # bagging
+library(keras)
 library(doParallel)
 library(foreach)
 library(dplyr)
@@ -87,6 +88,16 @@ nettest <- nnetfor2$mean
 load("classical.Rda")
 
 
+# GRU
+load("GRU.Rda")
+plot(gruHist)
+gruval <- as.ts(gruVal, frequency = 365, start = 4)
+grutest <- as.ts(gruTest, frequency = 365, start = 5)
+# LSTM
+load("LSTM.Rda")
+plot(lstmHist)
+lstmval <- as.ts(lstmVal, frequency = 365, start = 4)
+lstmtest <- as.ts(lstmTest, frequency = 365, start = 5)
 # bagging setup
 
 bagval <- data.frame(
@@ -97,9 +108,11 @@ bagval <- data.frame(
                   nnetar = netval,
                   arma = armaval,
                   aruma = seaval,
-                  arima = trendval
+                  arima = trendval,
+                  gru = gruval,
+                  lstm = lstmval
 )
-
+bagval  <- bagval %>% rename(gru = Series.1, lstm = Series.1.1)
 
 bagtest <- data.frame(
                   ppm = test[[1]],
@@ -109,10 +122,27 @@ bagtest <- data.frame(
                   nnetar = nettest,
                   arma = armatest,
                   aruma = seatest,
-                  arima = trendtest
+                  arima = trendtest,
+                  gru = grutest,
+                  lstm = lstmtest
 )
 
-
+bagtest  <- bagtest %>% rename(gru = Series.1, lstm = Series.1.1)
+head(bagtest)
+#    ppm    tbats       VAR    mseas    nnetar     arma     aruma    arima      gru
+# 1 1184 1809.520  959.2457 1277.236 1362.1571 2179.372  510.8580 2010.327 1170.033
+# 2 1402 1404.039 1714.1054 1120.083  990.3166 2294.699  529.3384 2210.001 1170.033
+# 3 4023 1680.536 1404.5155 1307.658 3222.4266 1884.723  633.9079 2172.542 1976.299
+# 4 1307 3021.346 1968.6322 2330.501 2942.1866 2157.577 2338.5355 2351.661 1170.033
+# 5 3717 1275.506 1753.5466 1124.515 4536.2270 2047.418 1003.7130 2332.033 1423.190
+# 6 2434 3134.465 2437.0611 2412.830 3650.7362 2191.756 3426.5422 2187.721 1170.033
+#       lstm
+# 1 3103.662
+# 2 3203.472
+# 3 2524.788
+# 4 2529.291
+# 5 2238.878
+# 6 2710.700
 rfmodel <- randomForest(ppm ~ ., data = bagval,
                         ntree = 1000, nodesize = 5, importance = TRUE)
 varImpPlot(rfmodel)
@@ -131,13 +161,15 @@ autoplot(bagtest$ppm, size = 2) +
   autolayer(bagtest$arma) +
   autolayer(bagtest$arima)+
   autolayer(bagtest$aruma)+
-  theme_economist() + scale_color_few()
+  autolayer(bagtest$gru)+
+  autolayer(bagtest$lstm)+
+  theme_hc() + scale_color_hc()
 scores(as.bag(rfPred))
 #           ASE          MAPE 
-# 1627238.33191      95.58204 
+# 1512906.64780      87.97279 
 sel <- dplyr::select
-bagval %>% sel(-aruma) -> bagval2
-bagtest %>% sel(-aruma) -> bagtest2
+bagval %>% sel(-arima) -> bagval2
+bagtest %>% sel(-arima) -> bagtest2
 
 # second iteration
 
@@ -149,7 +181,6 @@ varImpPlot(rfmodel2)
 rfPred2 <- predict(rfmodel2, bagtest2) 
 rfPred2 <- ts(rfPred2, frequency = 365,start = 5, end = 6)
 
-bagtest <- as.data.frame( lapply(bagtest, function(x) ts(x, frequency = 365, start = 5, end = 6)) )
 
 autoplot(bagtest$ppm, size = 2) + 
   autolayer(rfPred2, size = 2) +
@@ -158,15 +189,17 @@ autoplot(bagtest$ppm, size = 2) +
   autolayer(bagtest$mseas)+
   autolayer(bagtest$nnetar)+
   autolayer(bagtest$arma) +
-  autolayer(bagtest$arima)+
-  theme_economist() + scale_color_few()
+  autolayer(bagtest$aruma)+
+  autolayer(bagtest$gru)+
+  autolayer(bagtest$lstm)+
+  theme_hc() + scale_color_hc()
 scores(as.bag(rfPred2))
 #           ASE          MAPE 
-# 1582612.04491      91.39309 
+# 1475999.79538      73.95874 
 
 
-bagval2 %>% sel(-arima) -> bagval3
-bagtest2 %>% sel(-arima) -> bagtest3
+bagval2 %>% sel(-gru) -> bagval3
+bagtest2 %>% sel(-gru) -> bagtest3
 
 
 rfmodel3 <- randomForest(ppm ~ ., data = bagval3,
@@ -185,14 +218,18 @@ autoplot(bagtest$ppm, size = 2) +
   autolayer(bagtest$mseas)+
   autolayer(bagtest$nnetar)+
   autolayer(bagtest$arma) +
-  theme_economist() + scale_color_few()
+  autolayer(bagtest$aruma)+
+  autolayer(bagtest$lstm)+
+  theme_hc() + scale_color_hc()
 scores(as.bag(rfPred3))
+#           ASE          MAPE 
+# 1459104.71678      72.42156 
 #           ASE          MAPE 
 # 1663582.13660      83.92708 
 
 
-bagval3 %>% sel(-arma) -> bagval4
-bagtest3 %>% sel(-arma) -> bagtest4
+bagval3 %>% sel(-aruma) -> bagval4
+bagtest3 %>% sel(-aruma) -> bagtest4
 
 
 rfmodel4 <- randomForest(ppm ~ ., data = bagval4,
@@ -210,84 +247,22 @@ autoplot(bagtest$ppm, size = 2) +
   autolayer(bagtest$VAR) + 
   autolayer(bagtest$mseas)+
   autolayer(bagtest$nnetar)+
-  theme_economist() + scale_color_few()
+  autolayer(bagtest$arma)+
+  autolayer(bagtest$lstm)+
+  theme_hc() + scale_color_hc()
+
 scores(as.bag(rfPred4))
 #           ASE          MAPE 
-# 1587319.75626      73.99608 
-#          ASE         MAPE 
-# 1678434.7941      80.2246 
+# 1430136.15506      70.12737 
 
+colnames(bagval4)
+# [1] "ppm"    "tbats"  "VAR"    "mseas"  "nnetar" "arma"   "lstm"  
 
-bagval3 %>% sel(-VAR) -> bagval5
-bagtest3 %>% sel(-VAR) -> bagtest5
+# We could not get a better model than this.
 
+preTune <- rfmodel4
+preTunePred <- rfPred4
 
-rfmodel5 <- randomForest(ppm ~ ., data = bagval5,
-                        ntree = 1000, nodesize = 5, importance = TRUE)
-varImpPlot(rfmodel5)
-
-rfPred5 <- predict(rfmodel5, bagtest5) 
-rfPred5 <- ts(rfPred5, frequency = 365,start = 5, end = 6)
-
-bagtest <- as.data.frame( lapply(bagtest, function(x) ts(x, frequency = 365, start = 5, end = 6)) )
-
-autoplot(bagtest$ppm, size = 2) + 
-  autolayer(rfPred5, size = 2) +
-  autolayer(bagtest$tbats)+
-  autolayer(bagtest$mseas)+
-  autolayer(bagtest$nnetar)+
-  autolayer(bagtest$arma) +
-  theme_economist() + scale_color_few()
-scores(as.bag(rfPred5))
-#           ASE          MAPE 
-# 1519627.28610      74.51625 
-#           ASE          MAPE 
-# 1588473.62314      80.85361 
-
-
-bagval5 %>% sel(-arma) -> bagval6
-bagtest5 %>% sel(-arma) -> bagtest6
-
-
-rfmodel6 <- randomForest(ppm ~ ., data = bagval6,
-                        ntree = 1000, nodesize = 5, importance = TRUE)
-varImpPlot(rfmodel6)
-
-rfPred6 <- predict(rfmodel6, bagtest6) 
-rfPred6 <- ts(rfPred6, frequency = 365,start = 5, end = 6)
-
-bagtest <- as.data.frame( lapply(bagtest, function(x) ts(x, frequency = 365, start = 5, end = 6)) )
-
-autoplot(bagtest$ppm, size = 2) + 
-  autolayer(rfPred6, size = 2) +
-  autolayer(bagtest$tbats)+
-  autolayer(bagtest$mseas)+
-  autolayer(bagtest$nnetar)+
-  theme_economist() + scale_color_few()
-scores(as.bag(rfPred6))
-#           ASE          MAPE 
-# 1614809.18838      76.22955 
-
- # winner: number 5
-
-preTune <- (randomForest(ppm ~ ., data = bagval5,
-                         ntree = 1000, nodesize = 5, importance = TRUE))
-
-varImpPlot(preTune)
-
-prePred <- predict(preTune, bagtest5) 
-prePred <- ts(prePred, frequency = 365,start = 5, end = 6)
-
-bagtest <- as.data.frame( lapply(bagtest, function(x) ts(x, frequency = 365, start = 5, end = 6)) )
-
-autoplot(bagtest$ppm, size = 2) + 
-  autolayer(prePred, size = 2) +
-  autolayer(bagtest$tbats)+
-  autolayer(bagtest$mseas)+
-  autolayer(bagtest$nnetar)+
-  autolayer(bagtest$arma) +
-  theme_economist() + scale_color_few()
-scores(as.bag(prePred))
 
 
 # next: grid search
@@ -312,13 +287,13 @@ registerDoParallel(workers)
 set.seed(19)
 gridSearch <- foreach(i = 1:nrow(grid), .combine = rbind) %dopar% {
   model <- randomForest(ppm ~ .,
-                        data = bagval5,
+                        data = bagval4,
                         ntree = grid[i,1], 
                         mtry = grid[i,2], 
                         nodesize = grid[i,3],
   )
-  preds <- predict(model, bagtest5)
-  ASE <- mean((bagtest5$ppm - preds)^2)
+  preds <- predict(model, bagtest4)
+  ASE <- mean((bagtest4$ppm - preds)^2)
   data.frame(ASE = ASE, 
        ntree = grid[i,1], 
        mtry = grid[i,2], 
@@ -327,44 +302,59 @@ gridSearch <- foreach(i = 1:nrow(grid), .combine = rbind) %dopar% {
 }
 beepr::beep(0)
 str(gridSearch)
-gridSearch  <- gridSearch %>% arrange(ASE) %>% head
-#       ASE ntree mtry nodesize
-# 1 1503203   350    1        5
-# 2 1505175   400    1        5
-# 3 1505247   500    1        5
-# 4 1505972   150    1        5
-# 5 1506314   400    2        5
-# 6 1506468   200    1        5
 save(gridSearch, file = "rfS.Rda")
+gridSearch %>% arrange(ASE) %>% head
+#       ASE ntree mtry nodesize
+# 1 1415096   150    2       10
+# 2 1424538   750    3        5
+# 3 1425742  5250    3        5
+# 4 1425760  5350    3        5
+# 5 1425882    50    3       20
+# 6 1426509   850    3        5
 nrow(grid)
 # [1] 14000
 head(gridSearch)
 nrow(gridSearch)
 max(gridSearch$ASE) - min(gridSearch$ASE)
 
-set.seed(6969)
-final <- (randomForest(ppm ~ ., data = bagval5,
-                         ntree = 350, 
-                         nodesize = 5, 
-                         mtry = 1,
+set.seed(0)
+final <- (randomForest(ppm ~ ., data = bagval4,
+                         ntree = 150, 
+                         nodesize = 10, 
+                         mtry = 2,
                          importance = TRUE))
-save(final, file = "rfbag.Rda")
 
-finalPred <- predict(final, bagtest5) 
-save()
+finalPred <- predict(final, bagtest4) 
 scores(as.bag(finalPred))
 #           ASE          MAPE 
-# 1499160.06166      73.78823 
+# 1417963.83898      71.89685 
 finalPred <- ts(finalPred, frequency = 365,start = 5, end = 6)
 plot(final)
 
+save(final, file = "rfbag.Rda")
 save(finalPred, file = "bagged1.Rda")
-bagtest <- as.data.frame( lapply(bagtest, function(x) ts(x, frequency = 365, start = 5, end = 6)) )
 
 autoplot(bagtest$ppm, size = 2) + 
   autolayer(finalPred, size = 2) +
   autolayer(bagtest$tbats)+
+  autolayer(bagtest$VAR) + 
   autolayer(bagtest$mseas)+
   autolayer(bagtest$nnetar)+
-  autolayer(bagtest$arma) +
-  theme_economist() + scale_color_few()
+  autolayer(bagtest$arma)+
+  autolayer(bagtest$lstm)+
+  theme_hc() + scale_color_hc()
+
+
+autoplot(bagtest$ppm) + 
+  autolayer(finalPred, color = "red") +
+  theme_hc() + scale_color_hc()
+
+diffd <- ts(bagtest$ppm - finalPred, start = 5, end = 6, frequency = 365)
+aped <- ts(100*(bagtest$ppm - finalPred)/bagtest$ppm, start = 5, end = 6, frequency = 365)
+absd <- ts(abs(bagtest$ppm - finalPred), start = 5, end = 6, frequency = 365)
+ased <- ts((bagtest$ppm - finalPred)^2, start = 5, end = 6, frequency = 365)
+autoplot(ased) + theme_hc()
+# function(predicted, actual){
+#   100*mean(abs((actual-predicted)/actual))
+# }
+# <bytecode: 0x1a8cefb8>

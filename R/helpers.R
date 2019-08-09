@@ -256,3 +256,38 @@ scores.bag <- function(obj){
   c("ASE" = ase, "MAPE" = mape)
 }
 as.bag <- function(x) structure(x, class = "bag")
+
+
+as.keras <- function(x) structure(x, class = "keras")
+autoplot.keras <- function(obj){
+ testdf <- data.frame(type = "actual", 
+                      t = seq_along(test[,1]), 
+                      ppm = as.numeric(test[,1]))
+ preddf <- data.frame(type = "predicted", 
+                      t = seq_along(obj), 
+                      ppm = as.numeric( obj))
+ dfl <- list(testdf,preddf)
+ testPredPlot(dfl)
+}
+scores.keras <- function(obj){
+  c(ASE(obj, test[,1]), MAPE(obj, test[,1]))
+}
+
+
+scores.proph <- function(obj){
+  c(
+    ase = ASE(obj$yhat[-(1:nrow(train))], test[[1]]),
+    mape = MAPE(obj$yhat[-(1:nrow(train))], test[[1]])
+  )
+}
+as.proph <- function(x) structure(x, class = "proph")
+autoplot.proph <- function(obj){
+   testdf <- data.frame(type = "actual", 
+                        t = seq_along(test[[1]]), 
+                        ppm = as.numeric(test[[1]]))
+   preddf <- data.frame(type = "predicted", 
+                        t = seq_along(test[[1]]), 
+                        ppm = as.numeric( obj$yhat[-(1:nrow(train))] ))
+   dfl <- list(testdf,preddf)
+   testPredPlot(dfl)
+ }

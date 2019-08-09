@@ -50,24 +50,24 @@ estTrend <- estimate(trainTrend,6,3)
 ljung_box(estTrend$res, 6,3)
 plot_res(estTrend$res)
 
-# make some forecasts
+# make some fcsts
 
-armaval <- forecast(type = aruma, 
+armaval <- fcst(type = aruma, 
                      x = window(train, end = 4), 
                      phi = estARMA$phi,
                      theta = estARMA$theta, 
                      n.ahead = length(test)) %>>% as.wge
 armaval <- armaval$f
 
-armaCast <- forecast(type = aruma, 
+armaCast <- fcst(type = aruma, 
                      x = train, 
                      phi = estARMA$phi,
                      theta = estARMA$theta, 
                      n.ahead = length(test)) %>>% as.wge
 armatest <- armaCast$f
-# this is crap, but for short term forecasts maybe cool
+# this is crap, but for short term fcsts maybe cool
 
-seaval <- forecast(type = aruma, 
+seaval <- fcst(type = aruma, 
                     x = window(train, end = 4), 
                     phi = estSeas$phi, 
                     theta = estSeas$theta, 
@@ -75,7 +75,7 @@ seaval <- forecast(type = aruma,
                     n.ahead = length(test)) %>>% as.wge
 seaval <- seaval$f
 
-seaCast <- forecast(type = aruma, 
+seaCast <- fcst(type = aruma, 
                     x = train, 
                     phi = estSeas$phi, 
                     theta = estSeas$theta, 
@@ -83,16 +83,16 @@ seaCast <- forecast(type = aruma,
                     n.ahead = length(test)) %>>% as.wge
 seatest <- seaCast$f
 
-# now we do trend, which should be a pretty bad forecast as well
+# now we do trend, which should be a pretty bad fcst as well
 
-trendval <- forecast(type = aruma, 
+trendval <- fcst(type = aruma, 
                     x = window(train, end = 4), 
                     phi = estTrend$phi, 
                     theta = estTrend$theta, 
                     d = 1, 
                     n.ahead = length(test)) %>>% as.wge
 trendval <- trendval$f
-trendCast <- forecast(type = aruma, 
+trendCast <- fcst(type = aruma, 
                     x = train, 
                     phi = estTrend$phi, 
                     theta = estTrend$theta, 
@@ -103,7 +103,7 @@ trendtest <- trendCast$f
 
 save(armaval,armatest,seaval,seatest,trendval,trendtest, file ="classical.Rda")
 
-casts <- list("arma" = armaCast, "seasonal" = seaCast, "arima" = trendCast)
+casts <- data.frame("arma" = armaCast, "seasonal" = seaCast, "arima" = trendCast)
 
 pander( lapply(casts, scores) )
 # 
