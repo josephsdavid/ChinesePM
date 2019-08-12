@@ -1,5 +1,4 @@
 library(keras)
-library(ggplot2)
 library(ggthemes)
 library(ggplot2)
 library(dplyr)
@@ -37,9 +36,20 @@ str(dat)
 dat <- dat[-1,]
 mn <- apply(dat,2,mean)
 std <- apply(dat,2,sd)
+maxt <- floor( nrow(dat)*4/5 )
+maxv <- floor(nrow(dat))
+val <- dat[(maxv-365*2):( maxv - 365),]
+val <- scale(val, center = apply(val,2,mean), scale = apply(val,2,sd))
+valScale <- attr(val, 'scaled:scale')[1]
+# PM_US.Post 
+#   1907.681 
+valCent <- attr(val,'scaled:center')[1]
+# PM_US.Post 
+#    2333.48 
+val <- array(val, c(nrow(val),10,255))
 dat <- scale(dat, center = mn, scale = std)
 test2 <- scale(test, center = apply(test,2,mean), scale = apply(test,2,sd))
-test3  <- array(test2, c(nrow(test2),2,255))
+test3  <- array(test2, c(nrow(test2),10,255))
 
 
 generator <- function(data, lookback, delay, min_index, max_index,
@@ -72,15 +82,17 @@ generator <- function(data, lookback, delay, min_index, max_index,
   }
 }
 
-lookback  <- 16*3
-step <- 8*3
-delay  <- 4*3
-batch_size <- 300
+lookback  <- 60
+step <- 6
+delay  <- 1
+batch_size <- 150
 maxt <- floor( nrow(dat)*4/5 )
+# [1] 1460
 maxv <- floor(nrow(dat))
+# [1] 1826
+maxt-maxv
+# [1] -366
 
-val <- dat[(maxt+1):maxv,]
-val <- array(val, c(nrow(val),2,255))
 
 
 train_gen <- generator(
@@ -105,63 +117,36 @@ val_gen = generator(
 )
 
 # How many steps to draw from val_gen in order to see the entire validation set
-val_steps <- (maxv - maxt+1 - lookback) / batch_size
-test_steps <- (nrow(dat) - maxv+1 - lookback) / batch_size
+val_steps <- ((maxv - maxt+1 - lookback) / batch_size)
 
 model_lstm <- keras_model_sequential() %>%
-  layer_lstm(units = 10, dropout = 0.4, recurrent_dropout = 0.4, 
+  layer_lstm(units = 10, dropout = 0.4, recurrent_dropout = 0.1, 
              activation = "sigmoid",
              input_shape = list(NULL, dim(dat)[[-1]])
                              ,return_sequences = TRUE
               ) %>%
-bidirectional(layer_lstm(units = 20,  dropout = 0.4, recurrent_dropout = 0.4,
-            activation = "sigmoid", return_sequences = TRUE)) %>%
 bidirectional(layer_lstm(units = 40,  dropout = 0.4, recurrent_dropout = 0.4,
+            activation = "sigmoid", return_sequences = TRUE)) %>%
+bidirectional(layer_lstm(units = 80,  dropout = 0.4, recurrent_dropout = 0.4,
             activation = "sigmoid")) %>%
 #  layer_lstm(units = 32) %>%
   layer_dense(units = 1)
+
+
 model_lstm %>% compile(
-  optimizer = optimizer_rmsprop(),
-  loss = "mse",
-  metrics = c("mae")
+  optimizer = optimizer_rmsprop(lr = 0.0001),
+  loss = "mse"
 )
 history <- model_lstm %>% fit_generator(
   train_gen,
   steps_per_epoch = 40,
-  epochs = 20,
+  epochs = 1000,
   validation_data = val_gen,
   validation_steps = val_steps
 )
 beepr::beep(0)
 tail(history$metrics$l,1)
 summary(model_lstm)
-# Model: "sequential_13"
-# ____________________________________________________________________________________
-# Layer (type)                         Output Shape                      Param #      
-# ====================================================================================
-# lstm_39 (LSTM)                       (None, None, 10)                  10640        
-# ____________________________________________________________________________________
-# bidirectional_26 (Bidirectional)     (None, None, 40)                  4960         
-# ____________________________________________________________________________________
-# bidirectional_27 (Bidirectional)     (None, 80)                        25920        
-# ____________________________________________________________________________________
-# dense_13 (Dense)                     (None, 1)                         81           
-# ====================================================================================
-# Total params: 41,601
-# Trainable params: 41,601
-# Non-trainable params: 0
-# ____________________________________________________________________________________
-# NULL
-# [1] 0.729292
-# [1] 0.7533519
-# [1] 0.6793835
-# [1] 0.6712329
-# [1] 0.5938697
-# [1] 0.6511578
-# [1] 0.6154889
-# [1] 1.028304
-# [1] 0.7092065 0.6140919 0.7543543 1.2878188
-# [1] 0.7092065 0.6140919 0.7543543
 plot(history)
 
 preds <- predict(model_lstm, test3, n.ahead = nrow(test2))
@@ -169,6 +154,22 @@ preds <- preds*attr(test2, 'scaled:scale')[1] + attr(test2, 'scaled:center')[1]
 preds <- as.keras(preds)
 autoplot(preds)
 scores(preds)
+# [1] 2620311.331     112.932
+# [1] 2264006.7650     108.4946
+# [1] 2447509.8712      93.5238
+# [1] 2349747.4759     119.7062
+# [1] 2634292.3251     109.8894
+# [1] 2323102.16798      76.38773
+options(scipen = 999)
+evaluate(object = model_lstm, steps = 40, val)
+?evaluate
+evaluate_generator(model_lstm, val_gen, 40)
+
+# [1] 2.323102e+06 7.638773e+01
+# [1] 2622627.1637     106.8089
+# [1] 2622627.1637     106.8089
+# [1] 2847394.0867     110.9623
+# [1] 2847394.0867     110.9623
 # [1] 2875346.5665     129.8638
 # [1] 2482367
 # [1] 3719713
@@ -231,19 +232,52 @@ Lhist <- history
 # [1] 10008401
 # [1] 11065454
 # [1] 13792633
+load('trainErr.Rda')
+errorMean <- mean(trainErr)
+errorStd <- sd(trainErr)
+makeInterval <- function(prediction){
+  pm <- errorMean+errorStd
+  upper <- prediction + pm
+  lower  <- prediction - pm
+  return(data.frame(fitted = prediction, upper = upper, lower = lower))
+}
+
 
 lstmTest <- predict(model_lstm, test3, n.ahead = nrow(test2))
-lstmTest <- lstmTest*attr(test2, 'scaled:scale')[1] + attr(test2, 'scaled:center')[1]
+lstmTest <- makeInterval(lstmTest)
+descaleTest <- function(x){
+  x*attr(test2, 'scaled:scale')[1] + attr(test2, 'scaled:center')[1]
+}
+lstmTest <- lapply(lstmTest, descaleTest)
 lstmTest <- as.keras(lstmTest)
-scores(lstmTest)
-length(lstmTest)
 
 lstmVal <- predict(model_lstm, val, n.ahead = nrow(test2))
-lstmVal <- lstmTest*attr(test2, 'scaled:scale')[1] + attr(test2, 'scaled:center')[1]
-lstmVal <- as.keras(lstmTest)
-scores(lstmVal)
+lstmVal <- makeInterval(lstmVal)
+descaleVal <- function(x){
+  x*valScale + valCent 
+}
+lstmVal <- lapply(lstmVal, descaleVal)
+lstmVal <- as.keras(lstmVal)
+
+
+lstmTest <- predict(model_lstm, test3, n.ahead = nrow(test2))
+lstmTest2 <- predict(model_lstm, test3, n.ahead = nrow(test2))
+lstmTest <- lstmTest*attr(test2, 'scaled:scale')[1] + attr(test2, 'scaled:center')[1]
+lstmTest <- as.keras(lstmTest)
+
+
+save(lstmTest, lstmVal,file = "LSTM.Rda")
+
+scores(lstmTest)
+# [1] 2264006.7650     108.4946
+# [1] 2622627.1637     106.8089
+load("lstmHist.Rda")
 lstmHist
-lstmHist <- history
-save(lstmTest, lstmVal, lstmHist,file = "LSTM.Rda")
-save_model_hdf5(model_lstm, 'lstm.h5')
-load_model_hdf5("lstm.h5")
+lstmVal <- predict(model_lstm, val, n.ahead = nrow(test2))
+lstmVal <- lstmVal*valScale + valCent
+lstmVal <- as.keras(lstmVal)
+autoplot(lstmVal)
+scores(lstmVal)
+save(lstmTest, lstmVal,file = "LSTM.Rda")
+model_lstm <- load_model_hdf5( "winner.h5")
+

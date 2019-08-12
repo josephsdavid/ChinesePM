@@ -5,45 +5,45 @@ in
   pkgs.mkShell {
     name = "timeseRies";
     buildInputs = with pkgs; [
-       R
-       python37
-       rPackages.tidyverse
-       rstudio
-       rPackages.timetk
-       rPackages.tidyquant
-       rPackages.recipes
-       rPackages.rsample
-       rPackages.yardstick
-       rPackages.glue
-       rPackages.rmarkdown
-       rPackages.plotrix
-       rPackages.tree
-       rPackages.party
-       rPackages.randomForest
-       rPackages.opera
-       rPackages.RSNNS
-       rPackages.plyr
-       rPackages.neuralnet
-       rPackages.caret
-       rPackages.lomb
-       rPackages.pander
-       rPackages.Mcomp
-       rPackages.ggplot2
-       rPackages.data_table
-       rPackages.knitr
-       rPackages.latticeExtra
+      R
+      python37
+      rPackages.RCurl
+      rPackages.gbm
+      rPackages.codetools
+      rPackages.tidyverse
+      rPackages.remotes
       rPackages.httpuv
+      rstudio
+      vscode
+      python37Packages.pydot
+      rPackages.kerasR
+      rPackages.rmarkdown
+      rPackages.markdown
+      rPackages.plotrix
+      rPackages.tree
+      rPackages.party
+      rPackages.randomForest
+      rPackages.opera
+      rPackages.RSNNS
+      rPackages.plyr
+      rPackages.neuralnet
+      rPackages.caret
+      rPackages.lomb
+      rPackages.pander
+      rPackages.Mcomp
+      rPackages.ggplot2
+      rPackages.data_table
+      rPackages.knitr
+      rPackages.latticeExtra
       rPackages.reticulate
       rPackages.orcutt
       rPackages.tswge
-      rPackages.caret
       rPackages.doParallel
       rPackages.foreach
       rPackages.memoise
       rPackages.dplyr
       rPackages.purrr
       rPackages.cowplot
-      rPackages.quantmod
       rPackages.magrittr
       rPackages.functional
       rPackages.prophet
@@ -55,42 +55,32 @@ in
       rPackages.rlist
       rPackages.foreign
       rPackages.fpp2
-      rPackages.vroom
       rPackages.lubridate
       openblas
       evince
       xsv
       texlive.combined.scheme-full
       python37Packages.pandas
-      python37Packages.IMAPClient
-      unar # support free software duh
       rPackages.imputeTS
       rPackages.tensorflow
       rPackages.keras
       rPackages.FNN
       rPackages.fastNaiveBayes
+      #python37Packages.tensorflowWithCuda
       python37Packages.tensorflow
       python37Packages.tensorflow-tensorboard
       python37Packages.Keras
-      rPackages.forcats
-      rPackages.timetk
-      rPackages.tidyquant
-      rPackages.tibbletime
-      rPackages.recipes
-      rPackages.rsample
-      rPackages.yardstick
-      rPackages.tfruns
       python37Packages.pip
       python37Packages.numpy
       python37Packages.pandas
       python37Packages.matplotlib
       python37Packages.mxnet
     ];
-   shellHook = ''
+    shellHook = ''
 #     echo "#!/usr/bin/env Rscript" > libs.R
 #     echo "devtools::install_github('csgillespie/efficient', build_vignettes=TRUE)" >> libs.R
 #     Rscript libs.R
      R CMD INSTALL /home/david/scratch/tswgewrapped
-      '';
+    '';
 
   }

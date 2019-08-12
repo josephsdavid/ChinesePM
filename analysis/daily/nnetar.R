@@ -1,4 +1,4 @@
-fibrary(forecast)
+library(forecast)
 library(ggplot2)
 library(ggthemes)
 library(nnfor)
@@ -25,10 +25,12 @@ traints <- (purrr::keep(train,is.ts))
 trainexogen <- purrr::discard(train, is.ts)
 trainexogen <- lapply(trainexogen, as.factor) %>>% as.data.frame
 test %>% select(PM_US.Post, HUMI,  TEMP,   PRES, Iws) -> test
+str(train)
 traints %>% select(PM_US.Post, HUMI,  TEMP,   PRES, Iws) -> train
 
 nnet <- nnetar(train[[1]], xreg = train[-1],repeats = 1000)
 load("nnetar.Rda")
+str(test)
 save(nnet, file = "nnetar.Rda")
 summary(nnet)
 #           Length Class        Mode     

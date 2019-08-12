@@ -5,8 +5,9 @@ date: "`r Sys.Date()`"
 output: 
   html_document:
     toc: TRUE
+    number_sections: true
     toc_float:
-      collapsed: true
+      collapsed: false
       smooth_scroll: false
     theme: paper
     df_print: paged
@@ -28,40 +29,6 @@ knitr::opts_chunk$set(fig.path = 'fig/')
 options(scipen = 999)
 ```
 
-# Reproducing this analysis
-
-All work performed in this project is intended to be completely reproducible. The following sections describe the necessary steps to reproduce this analysis. Obviously the first step is to clone the parent repository:
-
-```{sh, eval = F}
-git clone https://github.com/josephsdavid/ChinesePM.git
-```
-
-## Reproducing the working environment
-
-### Using Nix
-
-The author is a huge fan of the reproducible package manager [nix](https://nixos.org/nix/), which allows the user to share a reproducible file `shell.nix`. When someone else runs from the command line `nix-shell`, the contents of the file are installed in isolation from the rest of the users system, and is dropped into a shell which perfectly reproduces the working environment of this project. To install remaining dependencies (namely devtools packages), you can run `Rscript libs.R` to automatically install them. This technique is highly recommended. Below are the contents of `libs.R`:
-
-```{r, code = readLines("../libs.R"), eval = F}
-```
-
-The `shell.nix` file can be seen in the github repository.
-
-Note that using this method will also automatically setup tensorflow, Keras, tensorboard, and any other necesary dependencies for deep learning time series models (with R and python). 
-
-### Without Nix
-
-To reproduce the R dependencies required for this analysis, please run `Rscript noNix.R`
-This reads `shell.nix`, searches for R packages, compares what is there to what is installed on your computer, and then if they are different, it installs them
-
-```{r, code = readLines("../noNix.R"), eval = F}
-```
-
-Note that this method will require you to manually set up a deep learning stack
-
-## Reproducing the models
-
-To reproduce the models from this project, you have two options: you can either load the saved `.Rda` files, or run all the models (as shown in this report). Note this will likely take several hours, as some of the models take a long time to train, and multiple grid searches over 10,000+ hyperparameters were performed.
 
 # Project Setting
 
@@ -492,7 +459,6 @@ We next create a `wge` class, where we can store our tswge forecasts
 as.wge <- function(x) structure(x,class = "wge")
 ```
 
-### Model evaluation
 
 We will use 3 methods to evaluate TSWGE models:
 
@@ -514,7 +480,7 @@ MAPE <- function(predicted, actual){
 
 #### Confidence Score
 
-Confidence score is a made up metric I created, in order to evaluate the prediction interval. How it works is as follows: For each point in the actual observations, if it lies outside the prediction interval, give that point a score of 1. If it is within the confidence interval, give it a score of 0. Then, sum up all of the scores.
+Confidence score is a made up metric I created, in order to evaluate the prediction interval. How it works is as follows: For each point in the actual observations, if it lies outside the prediction interval, give that point a score of 1. If it is within the confidence interval, give it a score of 0. Then, average the scores and multiply by 100 to get the percentage we got wrong.
 
 ```{r confun}
 checkConfint <- function(upper,lower, actual){
@@ -527,7 +493,7 @@ confScore <- function(upper, lower, actual){
     1,
     0
   )
-  sum(rawScores)
+  return(sum(rawScores)/(length(actual))*100)
 }
 ```
 
@@ -540,7 +506,7 @@ scores.wge <- function(xs){
   mape <- MAPE(xs$f,test)
   ase  <- ASE(xs$f,test)
   confs <- confScore(xs$ul, xs$ll,test)
-  c("MAPE" = mape, "ASE" = ase, "Conf.Score" = confs)
+  c("ASE" = ase, "MAPE" = mape,  "Conf.Score" = confs)
 }
 ```
 
@@ -571,8 +537,11 @@ autoplot.wge <- function(obj){
   preddf <- data.frame(type = "predicted", 
                        t = seq_along(obj$f), 
                        ppm = as.numeric( obj$f ))
+  confdf <- data.frame(upper = obj$ul, lower = obj$ll, t = seq_along(test))
   dfl <- list(testdf,preddf)
-  .testPredPlot(dfl)
+  .testPredPlot(dfl) + geom_line(data = confdf,
+                                 aes(x = t, y = lower, alpha = 0.2), linetype = 3003) + geom_line(data = confdf,
+                                 aes(x = t, y = upper, alpha = 0.2), linetype = 3003) + guides(alpha = FALSE)
 }
 
 ```
@@ -697,7 +666,7 @@ tswgewrapped::fcst
 ### ARMA
 
 ```{r}
-armaCast <- fcst(type = aruma, 
+armaCast <- tswgewrapped::fcst(type = aruma, 
                      x = train, 
                      phi = estARMA$phi,
                      theta = estARMA$theta, 
@@ -709,7 +678,7 @@ This one damps to the mean pretty quickly, however this may be a decent predicto
 ### ARUMA
 
 ```{r}
-seaCast <- fcst(type = aruma, 
+seaCast <- tswgewrapped::fcst(type = aruma, 
                     x = train, 
                     phi = estSeas$phi, 
                     theta = estSeas$theta, 
@@ -724,7 +693,7 @@ This looks a lot more like the time series, so it is likely a more appropriate m
 This will just be the last value over and over, highly uninteresting and not appropriate
 
 ```{r}
-trendCast <- fcst(type = aruma, 
+trendCast <- tswgewrapped::fcst(type = aruma, 
                     x = train, 
                     phi = estTrend$phi, 
                     theta = estTrend$theta, 
@@ -738,9 +707,9 @@ Nothing surprising here
 
 An airline model was not attempted, because it does not make much sense.
 
-### Model evaluation
+## Model evaluation
 
-#### Scores
+### Scores
 As the appropiateness of each model has already been noted, so now we can look at the scores of each model:
 
 ```{r}
@@ -756,13 +725,34 @@ autoplot(seaCast) + ggtitle("Seasonal")
 autoplot(trendCast) + ggtitle("ARIMA")
 ```
 
-```{r echo = F}
-unloadNamespace("tswgewrapped")
-```
+One important thing to note is the prediction intervals for these models. They did an excellent job of capturing the actual data within their prediction intervals. This is really useful information to us.
 
 ## Discussion
 
 Although our forecasts were not very good, especially our ARMA forecast will provide us with a nice benchmark to compare our newer models to, at least by ASE. I think the seasonality is an important factor in this dataset, and although our seasonal model did not do so well, it is worth looking more into. We will proceed next with some multiseasonal approaches. As it is daily data, there tend to be two major seasonalities: a weekly pattern, and a seasonal pattern. 
+
+## Saving the important data:
+
+We would like to save the important information from our models, so that way in the end, we have a nice list of all of our information. That is, the scores of the model, the predictions themselves, and the the prediction limits:
+
+```{r}
+makeModel <- function(...){
+  UseMethod("makeModel")
+}
+
+makeModel.wge <- function(obj){
+  score <- scores(obj)
+  return(list(
+              preds = obj$f,
+              ul = obj$ul,
+              ll = obj$ll,
+              ase = score[1],
+              mape = score[2],
+              Conf.Score = score[3]
+        ))
+}
+models <- lapply(casts, makeModel)
+```
 
 # Multiseasonal setup
 
@@ -862,15 +852,22 @@ autoplot.fore <- function(obj){
   preddf <- data.frame(type = "predicted", 
                        t = seq_along(test), 
                        ppm = as.numeric( obj$fitted[1:length(test)] ))
+
+  confdf <- data.frame(upper = obj$upper[,2], lower = obj$lower[,2], t = seq_along(test))
   dfl <- list(testdf,preddf)
-  .testPredPlot(dfl)
-}
+  .testPredPlot(dfl)+ geom_line(data = confdf, aes(x = t, y = lower, alpha = 0.2), 
+         linetype = 3003) + geom_line(data = confdf, aes(x = t, y = upper, alpha = 0.2), 
+         linetype = 3003) + guides(alpha = FALSE)
+ }
+
+
+
 
 scores.fore <- function(obj){
   mape <- MAPE(obj$fitted[1:length(test)], test)
   ase <- ASE(obj$fitted, test)
-  confs <- confScore(obj$upper[1:length(test)], obj$lower[1:length(test)], test)
-  c("MAPE" = mape, "ASE" = ase, "Conf.Score" = confs)
+  confs <- confScore(obj$upper[1:length(test),2], obj$lower[1:length(test),2], test)
+  c( "ASE" = ase, "MAPE" = mape,"Conf.Score" = confs)
 }
 ```
 
@@ -951,7 +948,27 @@ This appears to be a ridiculously good forecast. Lets check out how it scored:
 mseafor %>>% as.fore %>>% scores %>>% t  %>>% data.frame
 ```
 
-Wow. The ASE is nearly a million units smaller than the baseline ARMA forecast. This is a massive improvement, and it seems that our hypothesis of multiseasonality in the data was correct. Lets try a different multiple seasonality technique
+Wow. The ASE is nearly a million units smaller than the baseline ARMA forecast. This is a massive improvement, and it seems that our hypothesis of multiseasonality in the data was correct. Lets try a different multiple seasonality technique. Aside fro that, a good percentage of the data was stored in our prediction interval. This indicates that on its own, this model is a good forecasting tool.
+
+## Model saving
+
+We will now add this model to our list of models:
+
+```{r}
+makeModel.fore <- function(obj){
+  score  <- scores(obj)
+  return(list(
+              preds = obj$fitted,
+              ul = obj$upper[,2],
+              ll = obj$lower[,2],
+              ase = score[1],
+              mape = score[2],
+              Conf.Score = score[3]
+              ))
+}
+
+models$dynamic <- makeModel(as.fore(mseafor))
+```
 
 # TBATS 
 
@@ -1011,14 +1028,18 @@ Ok great we are good to go.
 cores <- parallel::detectCores()
 #> [1] 12
 bjbats <- tbats(train, use.parallel = TRUE, num.cores=cores-1)
+```
+
+```{r, echo = F}
+load("analysis/daily/tbats.Rda")
+```
+
+```{r}
 autoplot(bjbats)
 ```
 
 This is interesting too, so we see the I think trend that the algorithm smoothed out of the time series. Lets go ahead and make the forecast and see how we did
 
-```{r}
-load("analysis/daily/tbats.Rda")
-```
 ## Forecasting
 
 Since we already know what will happen if we just make a forecast with the `forecast` function, lets instead use our `newFore` method without comparison
@@ -1052,7 +1073,13 @@ Lets check out the scores:
 scores(forbats) %>>% data.frame
 ```
 
-By the numbers, this is an exceptional model as well (or at least better than our naive baseline). As far as appropriateness goes, it is hard to say as the TBATS algorithm is a bit black box. However, it got a pretty good forecast and looks similar to our original data, so I will give it a pass. I believe the fact that the seasonality can change is what made this a bit better than our regression with ARMA errors. 
+By the numbers, this is an exceptional model as well (or at least better than our naive baseline). As far as appropriateness goes, it is hard to say as the TBATS algorithm is a bit black box. However, it got a pretty good forecast and looks similar to our original data, so I will give it a pass. I believe the fact that the seasonality can change is what made this a bit better than our regression with ARMA errors. As far as prediction intervals go, this model managed to capture even further the swings of the data.
+
+## Saving the Forecast
+
+```{r}
+models$tbats <- makeModel(forbats)
+```
 
 # Prophet Algorithm
 
@@ -1084,10 +1111,10 @@ Next we define our autoplot and scoring methods:
 scores.proph <- function(obj){
   c(
     ase = ASE(obj$yhat[-(1:length(train))], test),
-    mape = MAPE(obj$yhat[-(1:length(train))], test)
+    mape = MAPE(obj$yhat[-(1:length(train))], test),
+    Conf.Score = confScore(upper = obj$yhat_upper[-(1:length(train))], lower = obj$yhat_lower[-(1:length(train))], test)
   )
 }
-
 autoplot.proph <- function(obj){
    testdf <- data.frame(type = "actual", 
                         t = seq_along(test), 
@@ -1095,8 +1122,12 @@ autoplot.proph <- function(obj){
    preddf <- data.frame(type = "predicted", 
                         t = seq_along(test), 
                         ppm = as.numeric( obj$yhat[-(1:length(train))] ))
+   confdf <- data.frame(t = seq_along(test), upper = obj$yhat_upper[-(1:length(train))], lower = obj$yhat_lower[-(1:length(train))])
    dfl <- list(testdf,preddf)
-   .testPredPlot(dfl)
+   .testPredPlot(dfl)+ geom_line(data = confdf, aes(x = t, y = lower, alpha = 0.2), 
+         linetype = 3003) + geom_line(data = confdf, aes(x = t, y = upper, alpha = 0.2), 
+         linetype = 3003) + guides(alpha = FALSE)
+
  }
 ```
 
@@ -1149,7 +1180,40 @@ pfore <- as.proph(fore)
 autoplot(pfore)
 ```
 
-This is a pretty weird little forecast. Because of the smoothing, and the normalized
+This is a pretty weird little forecast. Because of the smoothing, and the normalized nature of all the prophet algorithm (it is much closer to regression than anything else), it captures the shape of the series well, but it does not get the extremety of the series. This model may be good for detecting overall patterns in the data, but not for specific predictions. Lets check out the scores.
+
+```{r}
+data.frame(t(scores(pfore)))
+scores.proph
+# function(obj){
+#   c(
+#     ase = ASE(obj$yhat[-(1:length(train))], test),
+#     mape = MAPE(obj$yhat[-(1:length(train))], test),
+#     Conf.Score = confScore(upper = obj$yhat_upper, lower = obj$yhat_lower, test)
+#   )
+# }
+str(pfore)
+```
+
+These are not brilliant, only ever so slightly better than our baseline ARMA/mean score. This says a lot abouthow hard to beat common sense is.
+
+## Saving the model
+
+```{r}
+str(pfore)
+makeModel.proph <- function(obj){
+  score = scores(obj)
+  return(list(
+              preds = obj$yhat,
+              ul = obj$yhat_upper,
+              ll = obj$yhat_lower,
+              ase = score[1],
+              mape = score[2],
+              Conf.Score = score[3]
+              ))
+}
+models$prophet <- makeModel(pfore)
+```
 
 # Discussion of Multiseasonal models as a whole
 
@@ -1350,7 +1414,7 @@ Fuzzy clustering is similar to partitional clustering, except instead of *hard* 
 #### Dynamic Time Warping
 
 ```{r, echo = F, fig.width = 4}
-knitr::include_graphics("fig/dtw.png")
+knitr::include_graphics("dtw.png")
 ```
 
 Dynamic time warping, or DTW, pictured above, finds the best way to warp two time series to line up with each other over time. It creates a matrix which has dimensions m*n, where m and n are the size of two different time series. It does this for every possible pair. Then, for each matrix, it finds a path of indices which has the minimum number of steps and costs the least to line the two time series up. The distance measure is then computed based on the the number of steps it took to line the two up, weighted by cost. For more info please see the aforementioned paper
@@ -1462,8 +1526,8 @@ registerDoSEQ()
 
 ### Partitional grid search: model picking
 
-```{r}
-comparison$results$partitional %>% arrange(desc(Sil))
+```{r, cache = T}
+comparison$results$partitional %>% arrange(desc(Sil)) %>% head
 ```
 
 Well we have it. We can explore the results more ourself, the most important part is we found two groups
@@ -1472,7 +1536,7 @@ Well we have it. We can explore the results more ourself, the most important par
 
 We can conveniently rerun the best cluster with the `repeat_clustering` function:
 
-```{r}
+```{r, cache = T}
 clusters <- repeat_clustering(traints, comparison, comparison$pick$config_id)
 plot(clusters)
 clusts <- clusters@cluster
@@ -1532,12 +1596,12 @@ comparison2 <- compare_clusterings(
   score.clus = evaluators$score,
   pick.clus = evaluators$pick
 )
-comparison2$results$hiera %>% arrange(desc(Sil))
 ```
 
 Looks like GAK and DBA centroids absolutely won. Lets visualize the results
 
 ```{r}
+comparison2$results$hiera %>% arrange(desc(Sil))
 comparison2$results$hierarchical %>% arrange(desc(Sil),distance) %>% 
   ggplot(aes( fill = distance, y = Sil, x = distance)) + 
   geom_boxplot()+ 
@@ -1650,6 +1714,7 @@ We need three S3 methods here, an `as` method, an `autoplot` method, and a `scor
 as.var <- function(x) structure(x, class = "var")
 
 autoplot.var <- function(obj){
+  us <- obj$fcst$PM_US.Post
   testdf <- data.frame(type = "actual", 
                        t = seq_along(test$PM_US.Post), 
                        ppm = as.numeric(test$PM_US.Post))
@@ -1657,14 +1722,19 @@ autoplot.var <- function(obj){
                        t = seq_along(test$PM_US.Post), 
                        ppm = ( obj$fcst$PM_US.Post[,1]))
   dfl <- list(testdf,preddf)
-  .testPredPlot(dfl)
+  confdf <- data.frame(t = seq_along(test$PM_US.Post), upper = us[,3], lower = us[,2])
+  .testPredPlot(dfl)+ geom_line(data = confdf, aes(x = t, y = lower, alpha = 0.2), 
+         linetype = 3003) + geom_line(data = confdf, aes(x = t, y = upper, alpha = 0.2), 
+         linetype = 3003) + guides(alpha = FALSE)
 }
-
 scores.var <- function(obj){
   mape <- MAPE(obj$fcst$PM[,1], test$PM_US)
   ase <- ASE(obj$fcst$PM[,1], test$PM_US)
-  c("MAPE" = mape, "ASE" = ase)
+  us <- obj$fcst$PM_US.Post
+  conf  <- confScore(upper = us[,3], lower = us[,2], test$PM_US)
+  c("ASE" = ase,"MAPE" = mape , "Conf.Score" = conf)
 }
+
 ```
 
 ## Order Selection:
@@ -1812,6 +1882,25 @@ data.frame(t(scores(vpred)))
 
 Objectively, this model performed worse than the ARMA/mean baseline model. However, visually, it was only off by a bit. It seems to have gotten the period a bit wrong, while it is accurate in scale. It also has a few issues with the shape, but the forecast does not look unreasonable. This may be an interesting model in our bagged results.
 
+## Saving the Model
+
+```{r}
+makeModel.var <- function(obj){
+  score = scores(obj)
+  us <- obj$fcst$PM_US.Post
+  return(list(
+              preds = us[,1],
+              ul = us[,3],
+              ll = us[,2],
+              ase = score[1],
+              mape = score[2],
+              Conf.Score = score[3]
+              ))
+}
+
+models$var <- makeModel(vpred)
+```
+
 # Neural Network models
 
 We will try two different neural networks, a neural net ar (nnetar) model and a Long short-term memory (LSTM) model. 
@@ -1827,3 +1916,623 @@ For the first attempt at neural network forecasting, we will be using nnetar. Nn
 ## What does the nnetar function do?
 
 Basically, the `nnetar` function takes in your data, properly scales it for the neural network. We will discuss scaling extensively in the next section, do not worry. After scaling, if needed, it calculates the AR order of the time series, as well as the lags. Then, it takes your scaled time series, the things it calculated and adjustements it made, into the `nnet` function from the nnet library. Then, you have a model and you make predictions. It is very user friendly, and very very fast.
+
+## S3 Methods
+
+We will use standard, unremarkable coercion, autoplotting, and scoring methods for the neural net forecasts.
+```{r}
+as.nfor <- function(x) structure(x, class = "nfor")
+
+scores.nfor <- function(obj){
+  mape <- MAPE(obj$mean, test[[1]])
+  ase <- ASE(obj$mean, test[[1]])
+  confs <- confScore(upper = obj$upper[,2], lower = obj$lower[,2], test[[1]])
+  c("ASE" = ase,"MAPE" = mape,  "Conf.Score" = confs)
+}
+autoplot.nfor <- function(obj){
+  testdf <- data.frame(type = "actual", 
+                       t = seq_along(test[[1]]), 
+                       ppm = as.numeric(test[[1]]))
+  preddf <- data.frame(type = "predicted", 
+                       t = seq_along(test[[1]]), 
+                       ppm = as.numeric( obj$mean ))
+  confdf <- data.frame(t = seq_along(test[[1]]), upper = obj$upper[,2], lower = obj$lower[,2])
+  dfl <- list(testdf,preddf)
+  .testPredPlot(dfl)+ geom_line(data = confdf, aes(x = t, y = lower, alpha = 0.2), 
+         linetype = 3003) + geom_line(data = confdf, aes(x = t, y = upper, alpha = 0.2), 
+         linetype = 3003) + guides(alpha = FALSE)
+}
+
+```
+
+## Fitting the model
+
+This is much simpler and faster than the nnfor `mlp` and `elm` function, and without significant tinkering or expertise. Lets check it out.
+
+```{r, eval = F}
+traints %>% dplyr::select(PM_US.Post, HUMI,  TEMP,   PRES, Iws) -> train
+nnet <- nnetar(train[[1]], xreg = train[-1],repeats = 1000)
+```
+
+```{r, echo = F}
+load("analysis/daily/nnetar.Rda")
+```
+
+Lets check out what the model did
+
+```{r}
+data.frame(summary(nnet))
+```
+
+Interesting. We see that it chose an AR(1) our data. Lets look more closely at the model and the method to see what else is going on.
+
+```{r}
+nnet$model
+nnet$method
+```
+
+Pretty simple. 32 input nodes, 16 nodes in the hidden layer, and then collapsed into the output node. We can also see the details of our model. It is a `NNAR(27,1,16)[365]`. That is read as a neural network model, with the data lagged 27 times, AR(1), and 16 nodes in the hidden layer.
+
+## Forecasting
+
+The nnet models do not have the same issue as the other forecast models, so we can forecast without an s3 method
+
+```{r}
+test %>% dplyr::select(PM_US.Post, HUMI,  TEMP,   PRES, Iws) -> test
+```
+
+```{r, eval = F}
+nnetfor <- forecast(nnet, h = 366, xreg = test[-1], PI = TRUE)
+summary(nnetfor)
+```
+
+```{r, echo = -1}
+load("pres/nnetfor.Rda")
+summary(nnetfor)
+autoplot(nnetfor) + theme_hc()
+```
+
+## Model evaluation
+
+Lets take a closer look at the forecast:
+
+```{r}
+nfor <- as.nfor(nnetfor)
+autoplot(nfor)
+```
+
+Visually, this is not a bad forecast. We managed to capture a lot of the behavior of the time series, and even neared it on a few of the peaks. Lets check out the scores to see. I imagine the MAPE will be very good in this case.
+
+```{r}
+data.frame(t(scores(nfor)))
+```
+
+Looks like this one did about the same, maybe slightly better, than the common sense ARMA benchmark, in terms of ASE. However in terms of MAPE, this is far and away our best model. This means that in general, it was pretty close to the truth. However, when it missed, it missed by a lot. This is evidenced in our plot as well. We will now move to the more complex, and interesting, LSTM model
+
+## Saving the model
+
+### How is Prediction Interval Calculated for an ANN/MLP
+
+Please refer to this chapter of [Forecasting: Principles and Practice](https://otexts.com/fpp2/nnetar.html).
+
+```{r}
+makeModel.nfor <- function(obj){
+  score <- scores(obj)
+  return(list(
+          preds = obj$mean,
+          ul = obj$upper[,2],
+          ll = obj$upper[,2],
+          ase = score[1],
+          mape = score[2],
+          Conf.Score = score[3]
+          ))
+}
+models$nnetar = makeModel(nfor)
+```
+
+# Long Short-Term Memory (LSTM)
+
+LSTM models are a type of recurrent neural network. Before we get into the actual modeling, we need to stop and think about what this means.
+
+The model in this section is the result of hours and hours of hard work (over 700 models were trained by hand), and can be used, in its trained form, in `analysis/daily/winner.h5`.
+
+To load and test on your own dataset, you simply need to get the data in the right format (I will work on automating this later, for a fully reproducible, deployable model), and run `lstm_model <- load_model_hdf5("/path/to/winner.h5")`, and the fully trained model will pop up in your global environment.will pop up in your global environment.
+
+
+## What is a recurrent neural network(RNN)?
+
+To explain this, we need to discuss what a normal neural network, a feedforward neural network is. In a feedforward neural network, inputs go into the input layer, is mapped through an activation function, goes to some number of hidden layers with their own activation functions. The hidden layer finds a numerical way to represent the data that was fed into it, and then this representation is passed into the output layer. Information is fed straight in, and straight out. This means that a simple NN has no way of discerning anything about the order of things, or time. They know nothing about previous iterations. 
+
+In contrast, in an RNN, the inputs are not just the data, but the previous outputs of the RNN. This means it has a sort of memory about what it did in the past, and can learn from it. This also means they have a notion of order and time, and will do well for dealing with time series. The information of previous iterations is stored in the RNNs hidden layers, so with each iteration they are aware of the past. They are especially good at finding correlations between events which occured a long way apart. 
+
+> An RNN is a neural network that shares weights it has created over time
+
+## What is an LSTM?
+
+An LSTM is a special class of RNN, where extra (outside of the normal information flow of a RNN) information is stored in a gated cell. The cell is updated and changed by the RNN. What happens is the signal from inside the RNN is passed through a sigmoid funciton, and then based on the strength and weight of that signal, either allow it to be stored in the long term memory cell. This functional method allows for backpropogation of errors (it can remember the error of previous steps, and allow that to help the gradient boosted optimization of the network (we will discuss this)).
+
+There are three gates in the LSTM: 
+
+1. The input gate
+   * Information from the inputs is stored here
+
+2. The forget gate
+   * Information from the hidden layer is used to update this gate. It is allowed to both remember and forget information. This is what separates the LSTM from a GRU
+
+3. The ouptut gate
+   * Information at the output layer is stored here
+
+Thats the gist of it. We will get more into it as we build our model.
+
+
+For an ***extremely*** helpful discussion of neural networks and especially RNNs, please refer to [this link](https://skymind.com/wiki/lstm#feedforward)
+
+Please also note that the code in this section is based off of the code found in the excellent book `Deep Learning with R`, an excellent investment.
+
+
+## Data preparation
+
+As LSTMs rely on the sigmoid function, which is between zero and one, we must prepare our data accordingly (aka center and scale it). It also has to be in matrix form (for now). We also want the LSTM to see the lagged version of our variables. We are going to lag not only the xreg variables, but also our target data itself. This allows the neural network to do a sort of autocorrelation analysis of the data, as well as analysis of the cross corelation at many lags. For this, we will use the `mlag_dfr` function from my `tswgewrapped` package. This takes as an input column names, a vector of lags, and then adds those columns to the data frame. As we have tons of data, and are probably only going to go to about lag 50, we will deal with the NAs created in our typical manner: spline interpolation. Lets check out the `mlag_dfr` and `lag_dfr` functions:
+
+```{r}
+tswgewrapped::lag_dfr
+tswgewrapped::mlag_dfr
+```
+
+Now lets do the initial preprocessing of our data
+
+```{r, results = "hide"}
+library(keras)
+# reset the data state of this report
+rm(train, test, traints)
+dfsplit(bj2)
+
+# unneccessarily remove columns we arent using
+train[1:3]  <- NULL
+train[9:14] <- NULL
+test[1:3]  <- NULL
+test[9:14] <- NULL
+traints <- (purrr::keep(train,is.ts))
+test %>% dplyr::select(PM_US.Post, HUMI,  TEMP,   PRES, Iws) -> test
+traints %>% dplyr::select(PM_US.Post, HUMI,  TEMP,   PRES, Iws) -> train
+test <- mlag_dfr(test, names(test), 1:50)
+train <- mlag_dfr(train, names(train), 1:50)
+test <- impute(test) %>% as.data.frame
+train <- impute(train) %>% as.data.frame
+train <- data.matrix(train)
+test <- data.matrix(test)
+
+# make an overall data matrix
+dat <- rbind(train,test)
+
+# We have one too many columns because of the nature of the ts objects (with their windows, 
+# this is fine for forecasting but not for an LSTM)
+dat <- dat[-1,]
+
+# do not worry about this, we are doing this so later on when we do 
+# our bagging, we have a validation technique
+# it will all make sense i promise
+
+maxt <- floor( nrow(dat)*4/5 )
+maxv <- floor(nrow(dat))
+val <- dat[(maxv-365*2):( maxv - 365),]
+val <- scale(val, center = apply(val,2,mean), scale = apply(val,2,sd))
+valScale <- attr(val, 'scaled:scale')[1]
+valCent <- attr(val,'scaled:center')[1]
+val <- array(val, c(nrow(val),2,255))
+
+# normalize the data for the lstm
+mn <- apply(dat,2,mean)
+std <- apply(dat,2,sd)
+dat <- scale(dat, center = mn, scale = std)
+
+# lets also make an array for our test dataset
+# in the form of our input to the lstm, which we will discuss next
+# Note we are doing this in a convoluded manner because we want to be able
+# to denormalize our data. Next time i will use the recipes package
+# because this is a massive headache
+
+test2 <- scale(test, center = apply(test,2,mean), scale = apply(test,2,sd))
+test3  <- array(test2, c(nrow(test2),10,255))
+```
+
+That was a lot of code, but we did nothing fancy. Next, we are going to write a `generator function`. 
+This keeps us from having to load our data into the GPU's memory (if you are using a GPU). 
+
+## Generator function
+
+As mentioned above, if you are running GPU based calculations, you often dont want to load an entire dataset in your GPU's memory. So, it is good practice to write a generator function. What this will do is create another function. It will generate samples, moving forward through time, on the fly. As we want to move through the time series slowly, with overlap, there would be a massive amount of data to store. We need to define three values for this:
+
+***Lookback*** how far back we will go to grab our observations
+***steps*** How far apart our samples will be
+***delay*** How far ahead our targets will be from the observations
+***batch_size*** How many times we do this per batch
+
+```{r}
+lookback  <- 60 # observations will go back 60 days
+steps <- 6 # We will sample every 6 days
+delay  <- 1 # we will set our prediction targets to be 1 day ahead
+batch_size <- 150 #the number of times we will do this per batch
+```
+
+
+Next, we write a series of functions to generate these samples for our model
+
+```{r}
+generator <- function(data, lookback, delay, min_index, max_index,
+                      shuffle = FALSE, batch_size = 128, step = 6) {
+  if (is.null(max_index))
+    max_index <- nrow(data) - delay - 1
+  i <- min_index + lookback
+  function() {
+    if (shuffle) {
+      rows <- sample(c((min_index+lookback):max_index), size = batch_size)
+    } else {
+      if (i + batch_size >= max_index)
+        i <<- min_index + lookback
+      rows <- c(i:min(i+batch_size-1, max_index))
+      i <<- i + length(rows)
+    }
+
+    samples <- array(0, dim = c(length(rows),
+                                lookback / step,
+                                dim(data)[[-1]]))
+    targets <- array(0, dim = c(length(rows)))
+                      
+    for (j in 1:length(rows)) {
+      indices <- seq(rows[[j]] - lookback, rows[[j]]-1,
+                     length.out = dim(samples)[[2]])
+      samples[j,,] <- data[indices,]
+      targets[[j]] <- data[rows[[j]] + delay,2]
+    }           
+    list(samples, targets)
+  }
+}
+
+
+train_gen <- generator(
+  dat,
+  lookback = lookback,
+  delay = delay,
+  min_index = 1,
+  max_index = maxt,
+  shuffle = TRUE,
+  step = step, 
+  batch_size = batch_size
+)
+
+val_gen = generator(
+  dat,
+  lookback = lookback,
+  delay = delay,
+  min_index = maxt+1,
+  max_index = maxv,
+  step = step,
+  batch_size = batch_size
+)
+```
+
+```{r, echo = F}
+model_lstm <- load_model_hdf5("analysis/daily/winner.h5")
+```
+
+## Model Construction 
+
+We will discuss now the construction of our model. Our final model consists of 6 layers in this case, 5 LSTM layers and one standard densely connected neural network. We will discuss each unique layer in some detail, as extreme measures were necessary to avoid overfitting with such a small amount of data
+
+### How Does Training an LSTM Work?
+
+Training an LSTM works as follows:
+
+1. You define the number of batches per epoch. An ***epoch*** is a single training run for a neural network. So you define the number of times your generator function samples the data per epoch
+
+2. In each epoch, the neural net first reads in your training data, and trains on that, using whatever masking/dropout you have (we will discuss this). Then, when it is done with that, it runs the validation (test set in this case) data through the neural net, and compares results. On the validation set, it removes any predefined masking or dropout (which is why the loss is generally lower on the validation set). Things that are confusing now will be discussed later, as it makes more sense to define with an example. Basically, each epoch it runs through the training data N steps, with some tricks to prevent overfitting the training data. Then it runs through once with you validation/test set. With each step of this, weights for each parameter are stored in the nodes themselves, and other useful information such as error is stored in the gates. The weights and the info in the gates gets added to (and removed from in the case of the forget gate). This is done N steps, over M epochs, repeatedly updating the LSTM's weights and other information until we say so. 
+
+### Simple LSTM Layer
+
+The first layer consists of an LSTM with 10 hidden nodes. A small amount of nodes at the beginning was necessary to avoid overfitting (even at 50 nodes we rapidly overfit). The next tool we used to combat overfitting was dropout. There are two types of dropout. First we will discuss normal dropout:
+
+#### Normal Dropout
+
+Normal Dropout is used in the input and output layers of a neural network. For a given dropout rate N, it uses matrix multiplication to randomly remove N percentage of the data going in to the node. This is NOT used on the validation set. By showing the neural network less points of the significantly larger training set, it prevents overfitting on the training set
+
+#### Recurrent Dropout
+
+Recurrent Dropout is the exact same thing as normal dropout, except it affects the hidden layer instead of the input and output layers
+
+Our simple LSTM layer just has these parameters
+
+### Bidirectional LSTM Layers
+
+Next we pop the output of our first LSTM layer into two BiLSTM layers. A normal LSTM passes the data in from start to end. A ***bidirectional*** LSTM actually represents two LSTMs in parallel, one that reads the data from start to end, and one that reads the data from end to start. This helps it find even more interesting patterns and nuances in our data, increasing its representational power. Essentially, we are going to allow the LSTM to track long term patterns with equal power as short term powers with this. 
+
+
+### The Dense Layer
+
+A dense layer is a standard neural network. Adding this to our model further increases the representational power.
+
+## The Model
+
+We will now define the model:
+
+```{r, eval = F}
+model_lstm <- keras_model_sequential() %>%
+  layer_lstm(units = 10, dropout = 0.4, recurrent_dropout = 0.1, 
+             activation = "sigmoid",
+             input_shape = list(NULL, dim(dat)[[-1]]),
+             return_sequences = TRUE) %>%
+bidirectional(
+              layer_lstm(units = 40,  dropout = 0.4, recurrent_dropout = 0.4,
+                         activation = "sigmoid", return_sequences = TRUE)
+              ) %>%
+bidirectional(
+              layer_lstm(units = 80,  dropout = 0.4, recurrent_dropout = 0.4,
+                         activation = "sigmoid")
+              ) %>%
+  layer_dense(units = 1)
+```
+
+Lets see what the model looks like now
+
+```{r}
+model_lstm
+```
+
+## Compiling the model
+
+Next, we need to compile the model, or define how it trains. We will want to train it to optimize ASE, as we have been using that metric on the rest of the models. For our optimizing method, we will use `rmsprop`. To learn how RMSprop works, please see[this link](https://blog.paperspace.com/intro-to-optimization-momentum-rmsprop-adam/). It is typically a good optimizer for RNNs. 
+
+The parameter to really tune here is learning rate. We will see in the next section how to tune it. By default, the learning rate is `0.001`.
+
+```{r, eval = F}
+model_lstm %>% compile(
+  optimizer = optimizer_rmsprop(),
+  loss = "mse"
+)
+```
+
+## Training the model
+
+Finally, we get to train our model. We will save the history of our training, so we can diagnose the model
+
+```{r, echo = F}
+load("analysis/daily/LSTM.Rda")
+load("analysis/daily/lstmHist.Rda")
+```
+
+```{r, eval = F}
+lstmHist <- model_lstm %>% fit_generator(
+  train_gen,
+  steps_per_epoch = 40,
+  epochs = 20,
+  validation_data = val_gen,
+  validation_steps = val_steps
+)
+```
+
+## Model Diagnostics
+
+Lets look at the loss curve of our training to see how we did:
+
+```{r}
+plot(lstmHist)
+```
+
+There are two things to know about the loss curve:
+
+1. If the validation loss is greater than training loss, you are severly overfitting.
+
+2. If the loss is too steep, learning rate is too high. If it is too flat, the learning rate is too low
+
+For an amazing guide about tuning this, please refer to [this link](http://cs231n.github.io/neural-networks-3/#baby)
+
+Knowing this, we can now assess our model. First of all, thanks to our dropout, we are absolutely not overfitting. Looking at the shape, the learning rate is likely ***slightly*** too high, but this is not worth tuning. (This model performs excellently, and after several hundred tries I know it is not worth it to fiddle further).
+
+## Forecasting
+
+### Calculating Prediction Interval with LSTMs
+
+As with the ANN, there is no set way of calculting the prediction interval of an LSTM, as it is not a stochastic, parametric tool, it is simply a composition of lots of functions.
+However, we can use our dropout to approximate a prediction interval. For an in depth explanation, please refer to [this paper](https://arxiv.org/pdf/1506.02142.pdf). Basically, dropout is a random process. So each time we run our model on the training set, with our dropout, and our random generator function, we will get slightly different results (whereas when we make a prediction, we will not have the dropout, so it will be the same result every time). So, what we can do, is we can evaluate how well our model represents the training set, and use that to calculte a prediction interval. First, we will write a function that gets the mean error of our model over the training set:
+
+```{r}
+getMeanError <- function(mod){
+  # 28 is simply the integer number of times
+  # we need to sample from our training set to represent the whole thing.
+  # In this case it will run through the entire set three times
+  sqerror <- evaluate(mod, train_gen, 28)
+  return(sqrt(sqerror))
+}
+```
+
+Next, we will write a function which does this `n` times, so we have a sample of errors. First, a brief note about writing for loops in R
+
+#### How to write a good for loop in R
+
+First, we must allocate the space in our computer's RAM for the object we are constructing. If we do not do this, with each iteration of the for loop, R will actually destroy the object,  and then create a new one. This creates horrificly slow for loops. For more info on this, please see the amazing book [The R Inferno](https://www.r-bloggers.com/the-r-inferno-revised/). To allocate this space, we do as follows:
+
+
+```r
+out <- double(n) 
+```
+
+Note that we allocated it as a double. If you want to make the for loops even faster, you must help out your R interpreter. If you do not define the type of the output of your loop, with each iteration the R interpreter will have to guess the type, which prevents it from optimizing. Double is the equivalent of numeric, but makes more sense to the reader. 
+
+Next, we must define the for loop. We will us seq_along instead of length, because if somebody defines the object to be something with length zero, seq_along will behave properly, while length will break everything
+
+```r
+for (i in seq_along(out)){
+  do things here
+}
+```
+
+Now, lets write our for loop function, to get the errors `n` timese:
+
+```{r}
+GetErrors <- function(n){
+  errors <- double(n)
+  for (i in seq_along(errors)){
+    cat("evaluation number", i, "\n")
+    errors[i] <- getMeanError(model_lstm)
+  }
+  return(errors)
+}
+```
+
+Next, lets get our errors, for 1000 runs of the LSTM
+
+```r
+trainErr <- GetErrors(1000)
+```
+
+```{r, echo = F}
+load("analysis/daily/trainErr.Rda")
+```
+
+Next, lets look at the errors, and get their mean and std deviation:
+
+```{r}
+hist(trainErr)
+errorMean <- mean(trainErr)
+errorStd <- sd(trainErr)
+```
+
+Finally, lets write a function that takes our predictions, and gives them an interval for uncertainty:
+
+```{r}
+makeInterval <- function(prediction){
+  pm <- errorMean+errorStd
+  upper <- prediction + pm
+  lower  <- prediction - pm
+  return(data.frame(fitted = prediction, upper = upper, lower = lower))
+}
+```
+
+### S3 methods
+
+We define three S3 methods for predictions made by Keras:
+
+```{r}
+as.keras <- function(x) structure(x, class = "keras")
+autoplot.keras <- function(obj){
+ testdf <- data.frame(type = "actual", 
+                      t = seq_along(test[,1]), 
+                      ppm = as.numeric(test[,1]))
+ preddf <- data.frame(type = "predicted", 
+                      t = seq_along(test[,1]), 
+                      ppm = as.numeric(obj$fitted))
+ confdf <- data.frame(t = seq_along(test[,1]), upper = obj$upper, lower = obj$lower)
+ dfl <- list(testdf,preddf)
+ .testPredPlot(dfl) + geom_line(data = confdf, aes(x = t, y = lower, alpha = 0.2), 
+         linetype = 3003) + geom_line(data = confdf, aes(x = t, y = upper, alpha = 0.2), 
+         linetype = 3003) + guides(alpha = FALSE)
+}
+scores.keras <- function(obj){
+  c(ase = ASE(obj$fitted, test[,1]), 
+    mape = MAPE(obj$fitted, test[,1]),
+    Conf.Score = confScore( upper = obj$upper, lower = obj$lower, test[,1] ) 
+  )
+}
+```
+
+Now that we are set up, lets predict off of the test set to see how we did
+
+```{r}
+lstmTest <- predict(model_lstm, test3, n.ahead = nrow(test2))
+lstmTest <- makeInterval(lstmTest)
+descaleTest <- function(x){
+  x*attr(test2, 'scaled:scale')[1] + attr(test2, 'scaled:center')[1]
+}
+lstmTest <- lapply(lstmTest, descaleTest)
+lstmTest <- as.keras(lstmTest)
+```
+
+That was pretty easy. Now we see why we made these test2 and test3 objects, with the proper dimensions for our neural network. Without this it would be very difficult. The dimensions of the input array for our model are as follows:
+
+```r
+array(nrow(input), lookback/step, ncol(input))
+```
+
+## Forecast Evaluation
+```{r}
+autoplot(lstmTest)
+```
+
+
+
+Interesting. It matched the shape of the data excellently, or at least the overal pattern, but the peaks and troughs seem to be flattened. This is due to our slightly too high learning rate.To put it in human terms, the LSTM is learning too fast, and "skipping over" some details. 
+
+However, again trying to guess these is a bit overkill at this length forecast, and being conservative and "pretty good" is completely appropriate. Lets check out the scores:
+
+```{r}
+data.frame(t(scores(lstmTest)))
+```
+
+Wow. This gave us the very best forecast so far. Let us try now to build an ensemble forecast. To do this, and this will be explained later, lets fit the LSTM to the second to last year of our dataset:
+
+```{r}
+lstmVal <- predict(model_lstm, val, n.ahead = nrow(test2))
+lstmVal <- makeInterval(lstmVal)
+descaleVal <- function(x){
+  x*valScale + valCent 
+}
+lstmVal <- lapply(lstmVal, descaleVal)
+lstmVal <- as.keras(lstmVal)
+```
+
+## Further study
+
+With much much more data, it would be really interesting to try and build models with:
+
+* Convolutional Neural Networks (these are used a lot in practice)
+
+* Hyrid of CNN and LSTM
+
+* CNN with wavenet architecture [link](https://github.com/JEddy92/TimeSeries_Seq2Seq/blob/master/notebooks/TS_Seq2Seq_Conv_Intro.ipynb) (requires a lot more data)
+
+* GluonTS: State of The Art Probabalistic Time Series Forecasting with mxnet, currently working on (and trying to write an interface with R). [link](https://paperswithcode.com/paper/gluonts-probabilistic-time-series-models-in)
+
+* Time series classification
+
+* More clustering
+
+
+# Ensemble Methods
+
+# Reproducing this analysis
+
+All work performed in this project is intended to be completely reproducible. The following sections describe the necessary steps to reproduce this analysis. Obviously the first step is to clone the parent repository:
+
+```{sh, eval = F}
+git clone https://github.com/josephsdavid/ChinesePM.git
+```
+
+## Reproducing the working environment
+
+### Using Nix
+
+The author is a huge fan of the reproducible package manager [nix](https://nixos.org/nix/), which allows the user to share a reproducible file `shell.nix`. When someone else runs from the command line `nix-shell`, the contents of the file are installed in isolation from the rest of the users system, and is dropped into a shell which perfectly reproduces the working environment of this project. 
+This includes automatically installing and setting up the tensorflow/keras deep learning stack, installing complex dependencies, and if you comment out the tensorflow line and uncomment the tensorflow with CUDA line, will automatically set up tensorflow to run with Nvidia CUDA.
+
+To install remaining dependencies (namely devtools packages), you can run `Rscript libs.R` to automatically install them. This technique is highly recommended. Below are the contents of `libs.R`:
+
+```{r, code = readLines("../libs.R"), eval = F}
+```
+
+The `shell.nix` file can be seen in the github repository.
+
+Note that using this method will also automatically setup tensorflow, Keras, tensorboard, and any other necesary dependencies for deep learning time series models (with R and python). 
+
+### Without Nix
+
+To reproduce the R dependencies required for this analysis, please run `Rscript noNix.R`
+This reads `shell.nix`, searches for R packages, compares what is there to what is installed on your computer, and then if they are different, it installs them
+
+```{r, code = readLines("../noNix.R"), eval = F}
+```
+
+Note that this method will require you to manually set up a deep learning stack
+
+## Reproducing the models
+
+To reproduce the models from this project, you have two options: you can either load the saved `.Rda` files, or run all the models (as shown in this report). Note this will likely take several days, as some of the models take a long time to train, and multiple grid searches over 10,000+ hyperparameters were performed.
