@@ -104,8 +104,8 @@ getASE <- function(model){
 
 # plot test set vs predictions
 
-testPredPlot <- function(xs){
-  p <- ggplot() + theme_economist() + scale_color_few(palette = "Dark" )
+.testPredPlot <- function(xs){
+  p <- ggplot() + theme_hc() + scale_color_hc()
 
   doplot <- function(df){
     p <<- p + geom_line(data = df,
@@ -117,8 +117,6 @@ testPredPlot <- function(xs){
   }
   out <- lapply(xs, doplot)
   out[[2]]
-
-
 }
 
 # some metrics, including a made up one
@@ -153,9 +151,9 @@ as.wge <- function(x) structure(x,class = "wge")
 
 # method for getting scores of a wge object
 scores.wge <- function(xs){
-  mape <- MAPE(xs$f,test)
-  ase  <- ASE(xs$f,test)
-  confs <- confScore(xs$ul, xs$ll,test)
+  mape <- MAPE(xs$f,testU)
+  ase  <- ASE(xs$f,testU)
+  confs <- confScore(xs$ul, xs$ll,testU)
   c("MAPE" = mape, "ASE" = ase, "Conf.Score" = confs)
 }
 
@@ -163,13 +161,16 @@ scores.wge <- function(xs){
 # autoplot method for wge objects
 autoplot.wge <- function(obj){
   testdf <- data.frame(type = "actual", 
-                       t = seq_along(test), 
-                       ppm = as.numeric(test))
+                       t = seq_along(testU), 
+                       ppm = as.numeric(testU))
   preddf <- data.frame(type = "predicted", 
                        t = seq_along(obj$f), 
                        ppm = as.numeric( obj$f ))
-  dfl <- list(testdf,preddf)
-  testPredPlot(dfl)
+  confdf <- data.frame(upper = obj$ul, lower = obj$ll, t = seq_along(testU))
+  dfl <- list(preddf,testdf)
+  .testPredPlot(dfl) + geom_line(data = confdf,
+                                 aes(x = t, y = lower, alpha = 0.2), linetype = 3003) + geom_line(data = confdf,
+                                 aes(x = t, y = upper, alpha = 0.2), linetype = 3003) + guides(alpha = FALSE)
 }
 
 
@@ -177,21 +178,26 @@ autoplot.wge <- function(obj){
 
 
 as.fore <- function(x) structure(x, class = "fore")
+
 autoplot.fore <- function(obj){
   testdf <- data.frame(type = "actual", 
-                       t = seq_along(test), 
-                       ppm = as.numeric(test))
+                       t = seq_along(testU), 
+                       ppm = as.numeric(testU))
   preddf <- data.frame(type = "predicted", 
-                       t = seq_along(test), 
-                       ppm = as.numeric( obj$fitted[1:length(test)] ))
-  dfl <- list(testdf,preddf)
-  testPredPlot(dfl)
-}
+                       t = seq_along(testU), 
+                       ppm = as.numeric( obj$mean[1:length(testU)] ))
+
+  confdf <- data.frame(upper = obj$upper[1:length(testU),2], lower = obj$lower[1:length(testU),2], t = seq_along(testU))
+  dfl <- list(preddf,testdf)
+  .testPredPlot(dfl)+ geom_line(data = confdf, aes(x = t, y = lower, alpha = 0.2), 
+         linetype = 3003) + geom_line(data = confdf, aes(x = t, y = upper, alpha = 0.2), 
+         linetype = 3003) + guides(alpha = FALSE)
+ }
 
 scores.fore <- function(obj){
-  mape <- MAPE(obj$fitted[1:length(test)], test)
-  ase <- ASE(obj$fitted, test)
-  confs <- confScore(obj$upper[1:length(test)], obj$lower[1:length(test)], test)
+  mape <- MAPE(as.numeric(obj$mean[1:length(testU)]), as.numeric(testU))
+  ase <- ASE(as.numeric(obj$mean[1:length(testU)]), as.numeric(testU))
+  confs <- confScore(as.numeric(obj$upper[1:length(testU),2]), as.numeric(obj$lower[1:length(testU),2]), as.numeric(testU))
   c("MAPE" = mape, "ASE" = ase, "Conf.Score" = confs)
 }
 
@@ -212,41 +218,51 @@ newFore.bats <- function(obj, newdata, h = 1){
 }
 
 
+
+as.var <- function(x) structure(x, class = "var")
 autoplot.var <- function(obj){
+  us <- obj$fcst$PM_US.Post
   testdf <- data.frame(type = "actual", 
-                       t = seq_along(test$PM_US.Post), 
-                       ppm = as.numeric(test$PM_US.Post))
+                       t = seq_along(testM$PM_US.Post), 
+                       ppm = as.numeric(testM$PM_US.Post))
   preddf <- data.frame(type = "predicted", 
-                       t = seq_along(test$PM_US.Post), 
+                       t = seq_along(testM$PM_US.Post), 
                        ppm = ( obj$fcst$PM_US.Post[,1]))
   dfl <- list(testdf,preddf)
-  testPredPlot(dfl)
+  confdf <- data.frame(t = seq_along(testM$PM_US.Post), upper = us[,3], lower = us[,2])
+  .testPredPlot(dfl)+ geom_line(data = confdf, aes(x = t, y = lower, alpha = 0.2), 
+         linetype = 3003) + geom_line(data = confdf, aes(x = t, y = upper, alpha = 0.2), 
+         linetype = 3003) + guides(alpha = FALSE)
 }
 scores.var <- function(obj){
-  mape <- MAPE(obj$fcst$PM[,1], test$PM_US)
-  ase <- ASE(obj$fcst$PM[,1], test$PM_US)
-  c("MAPE" = mape, "ASE" = ase)
+  mape <- MAPE(obj$fcst$PM[,1], testM$PM_US)
+  ase <- ASE(obj$fcst$PM[,1], testM$PM_US)
+  us <- obj$fcst$PM_US.Post
+  conf  <- confScore(upper = us[,3], lower = us[,2], testM$PM_US)
+  c("ASE" = ase,"MAPE" = mape , "Conf.Score" = conf)
 }
-as.var <- function(x) structure(x, class = "var")
 
 
 as.nfor <- function(x) structure(x, class = "nfor")
+
 scores.nfor <- function(obj){
-  mape <- MAPE(obj$mean[1:length(test[[1]])], test[[1]])
-  ase <- ASE(obj$mean, test[[1]])
-  c("MAPE" = mape, "ASE" = ase)
+  mape <- MAPE(obj$mean, testM[[1]])
+  ase <- ASE(obj$mean, testM[[1]])
+  confs <- confScore(upper = obj$upper[,2], lower = obj$lower[,2], testM[[1]])
+  c("ASE" = ase,"MAPE" = mape,  "Conf.Score" = confs)
 }
-
-
 autoplot.nfor <- function(obj){
   testdf <- data.frame(type = "actual", 
-                       t = seq_along(test[[1]]), 
-                       ppm = as.numeric(test[[1]]))
+                       t = seq_along(testM[[1]]), 
+                       ppm = as.numeric(testM[[1]]))
   preddf <- data.frame(type = "predicted", 
-                       t = seq_along(test[[1]]), 
+                       t = seq_along(testM[[1]]), 
                        ppm = as.numeric( obj$mean ))
+  confdf <- data.frame(t = seq_along(testM[[1]]), upper = obj$upper[,2], lower = obj$lower[,2])
   dfl <- list(testdf,preddf)
-  testPredPlot(dfl)
+  .testPredPlot(dfl)+ geom_line(data = confdf, aes(x = t, y = lower, alpha = 0.2), 
+         linetype = 3003) + geom_line(data = confdf, aes(x = t, y = upper, alpha = 0.2), 
+         linetype = 3003) + guides(alpha = FALSE)
 }
 
 
@@ -266,7 +282,7 @@ autoplot.keras <- function(obj){
  preddf <- data.frame(type = "predicted", 
                       t = seq_along(obj), 
                       ppm = as.numeric( obj))
- dfl <- list(testdf,preddf)
+ dfl <- list(preddf,testdf)
  testPredPlot(dfl)
 }
 scores.keras <- function(obj){
@@ -288,6 +304,6 @@ autoplot.proph <- function(obj){
    preddf <- data.frame(type = "predicted", 
                         t = seq_along(test[[1]]), 
                         ppm = as.numeric( obj$yhat[-(1:nrow(train))] ))
-   dfl <- list(testdf,preddf)
+   dfl <- list(preddf,testdf)
    testPredPlot(dfl)
  }

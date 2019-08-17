@@ -7,7 +7,7 @@ output:
     toc: TRUE
     number_sections: true
     toc_float:
-      collapsed: false
+      collapsed: true
       smooth_scroll: false
     theme: paper
     df_print: paged
@@ -1846,7 +1846,7 @@ preds <- predict(var1, n.ahead = 366)
 pred <- preds$fcst$PM_US.Post[,1]
 mean( (test$PM_US.Post-pred)^2 )
 plot(preds)
-summary(lm(data = traints, PM_US.Post ~.)) -> thelm
+summary(lm(data = traints, PM_US.Post ~.))
 
 traints %>% select(PM_US.Post, HUMI, DEWP, TEMP, precipitation, PRES, Iws) -> trainsimp
 var2 <- VAR(trainsimp, p = 3, type = "none", ic = "AIC", season = 365)
@@ -1983,12 +1983,10 @@ test %>% dplyr::select(PM_US.Post, HUMI,  TEMP,   PRES, Iws) -> test
 
 ```{r, eval = F}
 nnetfor <- forecast(nnet, h = 366, xreg = test[-1], PI = TRUE)
-summary(nnetfor)
 ```
 
 ```{r, echo = -1}
 load("pres/nnetfor.Rda")
-summary(nnetfor)
 autoplot(nnetfor) + theme_hc()
 ```
 
@@ -2480,6 +2478,18 @@ lstmVal <- lapply(lstmVal, descaleVal)
 lstmVal <- as.keras(lstmVal)
 ```
 
+### Saving the model
+
+```{r}
+makeModel.keras <- function(obj) {
+     score <- scores(obj)
+     return(list(preds = obj$fitted, ul = obj$upper, ll = obj$lower, ase = score[1], mape = score[2], 
+         Conf.Score = score[3]))
+ }
+
+models$keras <- makeModel(lstmTest)
+```
+
 ## Further study
 
 With much much more data, it would be really interesting to try and build models with:
@@ -2498,6 +2508,371 @@ With much much more data, it would be really interesting to try and build models
 
 
 # Ensemble Methods
+
+In the previous sections, we created several time series models of the PM 2.5 content in Beijing's air. When faced with the task of choosing just one, we find ourselves asking "do we have to choose?". Each model produced tells us a different story, and are in general somewhat useful.
+
+> All models are bad. Some are useful - George Box
+
+An overview of the models:
+
+```{r}
+str(models) 
+```
+
+Why would we want to pick just one, and lose the utility of the rest?
+Instead, we can try combining them into an even better model
+
+> But how?
+
+There are many ways to combine models in data science. The simplest of which would be to just average all of our forecasts together and call it a day. However, after all this work, that would certainly be uneventful. We would like to be able to have all the strengths of our models, and less of the weaknesses. How can we do that?
+
+## Stacked Ensembles and Super Learning
+
+[reference](http://docs.h2o.ai/h2o/latest-stable/h2o-docs/data-science/stacked-ensembles.html)
+
+[paper](https://www.degruyter.com/view/j/sagmb.2007.6.issue-1/sagmb.2007.6.1.1309/sagmb.2007.6.1.1309.xml)
+
+The most State of the Art (SOTA) technique for combining models in such a way that each of their benefits is reaped is known as ***Ensemble Stacking*** or ***Super Learning***. To do super learning, we need to follow these steps:
+
+* Train a bunch of models (done)
+
+* Make predictions on a smaller subset of the data (partially done), using the base learners
+
+* Train a meta learning model (metalearner) on these predictions
+
+* Put new data into the base learners, have it make predictions
+
+* Feed those predictions into the metalearner, and have it make predictions.
+
+By using a machine learning model to combine our models, it can pick and choose the best parts of our model, in order to create a model with even more general utility.
+
+## Metalearners
+
+There are three main metalearning models for stacked ensembles:
+
+* GLM (generalized linear model)
+
+* Gradient Boosting (and XGBoost)
+
+* Random Forests
+
+We will not consider the GLM, as linear models in general are not appropriate for time series data. We will give a brief overview of the other two here:
+
+### Random Forest
+
+A random forest works as follow
+
+1. Choose a random subset of the features in your dataset
+
+2. Take a random sample from the selected features
+
+3. Fit a **fully grown** decision tree to that sample
+
+4. Repeat steps 1-3 many (think thousands and millions) times
+
+5. Bag (bootstrap aggregate) these together
+
+By bagging thousands of decision trees, which tend to struggle with overfitting (low bias, high variance), the random forest gets us a model which is low  bias and low variance (aka a great model). To see how this works, please refer to [this paper](https://web.stanford.edu/~hastie/Papers/ESLII.pdf). The random forest gets near (slightly higher) the bias of a decision tree overfit to the original data, but manages to get a significantly lower variance, leaving you with a good model. 
+
+What does this mean to us? This means it will find the optimal way to weight our predictions, and combine them, using the power of a forest of decision trees, so that we have a new, super predictive model.
+
+### Gradient Boosting
+
+> If linear regression was a toyata camry, then gradient boosting would be a Blackhawk helicopter [source](http://blog.kaggle.com/2017/01/23/a-kaggle-master-explains-gradient-boosting/)
+
+Gradient boosting works very similarly to the random forest, except instead of many fully grown trees in parallel, it grows many short trees (some algorithms grow decision "stumps" even) iteratively, learning from each one and trying to optimize a predefined loss function (likely mse) with each step, by using the gradient. Basically, it starts with a high bias low variance decision tree (short), then makes another one and another one, each time lowering bias further and further, and then bags them together to also attain low bias and low variance.
+
+The way our models are combined with these two methods are the same. Let us set ourselves up.
+
+# Ensemble modeling: Setup
+
+For the benefit of the reader, we will not go into the tedious process of choosing which models are going to go in to the super learning algorithm. If you would like to see the model choice method, please refer to: [stacking.R](https://github.com/josephsdavid/ChinesePM/blob/master/analysis/daily/stacking.R)
+
+The first step of our setup is to make predictions for the second to last year of our data for each of our models
+
+## Classical Models
+
+Only the baseline ARMA model was used in this section, as forecasting the mean with a little wiggle seemed to make our model overall better when picking base models. Forecasting the second to last year of data is trivial, and can be seen in [classicalUvar.R](https://github.com/josephsdavid/ChinesePM/blob/master/analysis/daily/classicalUvar.R).
+
+## VAR
+
+First, a function to split our training dataset into train and validation sets was defined:
+```{r}
+dfsplit2 <- function(df,n = 4){
+   index <- length(window(df[[1]], end = n))
+   tsdf <- df %>% purrr::keep(is.ts)
+   nodf <- df %>% purrr::discard(is.ts)
+   outs <- lapply(tsdf, function(x) window(x,end = n))
+   outn <- nodf[1:index,]
+   train2<<-as.data.frame(append(outs,outn))
+   tests <- lapply(tsdf, function(x) window(x, start = n))
+   validation <<- as.data.frame(append(tests, nodf[(index):nrow(nodf),]))
+ }
+dfsplit
+```
+
+These two functions allow us to split our training and test sets into smaller training and validation sets, as seen here:
+
+```{r}
+dfsplit(bj2)
+dfsplit2(train)
+test %>% dplyr::select(PM_US.Post, HUMI,  TEMP,   PRES, Iws) -> test
+validation %>% dplyr::select(PM_US.Post, HUMI,  TEMP,   PRES, Iws) -> validation
+train %>% dplyr::select(PM_US.Post, HUMI,  TEMP,   PRES, Iws) -> train
+train2 %>% dplyr::select(PM_US.Post, HUMI,  TEMP,   PRES, Iws) -> train2
+```
+
+Then, VAR was forecast on the validation and test sets
+
+```{r, eval = F}
+# validation model
+var <- VAR(train2, p = 3, type = "none", ic = "AIC", season = 365)
+preds <- predict(var, n.ahead = 366)
+varval <- preds$fcst$PM_US.Post[,1]
+
+# test model
+vart <- VAR(train, p = 3, type = "none", ic = "AIC", season = 365)
+preds <- predict(vart, n.ahead = 366)
+vartest <- preds$fcst$PM_US.Post[,1]
+```
+
+
+## Prophet
+
+I do not necessarily believe in the prophet model, as a useful forecasting tool, so it is not included.
+
+## TBATS
+
+same procedure, luckily this model was already defined
+
+```{r, eval = F}
+# validation
+batval <- newFore(obj = bjbats,  msts(validation[[1]], seasonal.periods = c(7, 365.25)), h = 366)
+batval <- fitted(batval)
+
+# test
+battest <- newFore(obj = bjbats,  msts(test[[1]], seasonal.periods = c(7, 365.25)), h = 366)
+battest <- fitted(battest)
+
+```
+
+## Multiseasonal
+
+Here we need to fourier expand our validation set before we can predict
+
+```{r, eval = F}
+# validation
+xpansion <- fourier(msts(validation[[1]], seasonal.periods = c(7,365.25)), K = c(3,100))
+mseaval <- newFore(mseadyn, newdata = msts(validation[[1]], seasonal.periods = c(7,365.25)), xreg =xpansion, h = 1)
+mseaval <- fitted(mseaval)
+
+# test
+xpansion <- fourier(msts(test[[1]], seasonal.periods = c(7,365.25)), K = c(3,100))
+mseatest <- newFore(mseadyn, newdata = msts(test[[1]], seasonal.periods = c(7,365.25)), xreg =xpansion, h = 1)
+mseatest <- fitted(mseatest)
+
+```
+
+## nnetar
+
+Here we see why we split up the validation set and got rid of useless columns in advance. This will take much less than the 8 hours it took to predict previously, as there are no prediction intervals to calculate
+
+```{r, eval = F}
+
+nnnetfor <- forecast(nnet, h = 366, xreg = validation[-1])
+netval <- nnetfor$mean
+
+nnnetfor2 <- forecast(nnet, h = 366, xreg = test[-1])
+nettest <- nnetfor2$mean
+
+```
+
+
+## LSTM
+
+We already did the LSTM validation and test sets in advance, thankfully, so we do not have to worry about reformatting data, or doing this again
+
+## Combining them:
+
+```{r, eval = F}
+
+bagval <- data.frame(
+                  ppm = validation[[1]],
+                  tbats = batval,
+                  VAR = varval,
+                  mseas = mseaval,
+                  nnetar = netval,
+                  arma = armaval,
+                  lstm = lstmval
+)
+
+bagtest <- data.frame(
+                  ppm = test[[1]],
+                  tbats = battest,
+                  VAR = vartest,
+                  mseas = mseatest,
+                  nnetar = nettest,
+                  arma = armatest,
+                  lstm = lstmtest
+)
+```
+
+Lets check it out
+```{r, echo = F}
+load("analysis/daily/bags.Rda")
+bagval <- bagval %>% dplyr::select(-c(arima, aruma))
+bagtest <- bagtest %>% dplyr::select(-c(arima, aruma))
+```
+
+```{r}
+head(bagval)
+head(bagtest)
+```
+
+# Random Forest
+
+First, we will run a random forest on the data, without any tuning, just to see what we will get, then we will perform a grid search and tune the model, followed by calculting a prediction interval:
+
+## Dry run
+
+```{r}
+library(randomForest)
+preTune <- randomForest(ppm ~ ., data = bagval,
+                        ntree = 1000, nodesize = 5, importance = TRUE)
+varImpPlot(preTune)
+```
+
+Next, lets write a quick scoring method, followed by viewing the prediction
+
+### Quick S3 method
+
+```{r}
+as.ensemble <- function(x) structure(x, class = "ensemble")
+
+scores.ensemble <- function(obj){
+  ase <- ASE(obj, bagtest[[1]])
+  mape <- MAPE(obj, bagtest[[1]])
+  c("ASE" = ase, "MAPE" = mape)
+}
+```
+
+Next, lets make the prediction and view it:
+
+```{r}
+preTunePred <- predict(preTune, bagtest) 
+preTunePred <- ts(preTunePred, frequency = 365,start = 5, end = 6)
+
+bagtest <- as.data.frame(lapply(bagtest, function(x) ts(x, frequency = 365, start = 5, end = 6)))
+autoplot(bagtest$ppm, size = 2) + 
+  autolayer(preTunePred, size = 2) +
+  autolayer(bagtest$tbats)+
+  autolayer(bagtest$VAR) + 
+  autolayer(bagtest$mseas)+
+  autolayer(bagtest$nnetar)+
+  autolayer(bagtest$arma) +
+  autolayer(bagtest$lstm)+
+  theme_hc() + scale_color_hc()
+```
+
+This looks like a ridiculous forecast. Lets check it out in more detail:
+
+```{r}
+autoplot(bagtest$ppm) + 
+  autolayer(preTunePred) +
+  theme_hc() + scale_color_hc()
+```
+
+And the raw scores:
+
+```{r}
+data.frame(scores(as.ensemble(preTunePred)))
+```
+
+This is an absurdly good forecast. We have already reduced our lowest ASE by nearly a million. Lets now try a grid search to optimize even further
+
+## Parallelized Grid Search
+
+With models like Random Forests and Gradient Boosting, it is important to get the parameters just right, in order to get the best model out of it. They are not so simple as just setting p = 5. It is the same as with the deep learning models, a lot of effort is involved with getting the best prediction. With that said, we will now tune **all** the parameters of the random forest with this data, in order to get the absolute best prediction.
+
+```{r, echo = F}
+load("analysis/daily/rfS.Rda")
+load("analysis/daily/rfbag.Rda")
+finalForest <- final
+load("analysis/daily/bagged1.Rda")
+finalForestPred <- finalPred
+```
+
+### Setting up the grid
+
+First, we initialize a grid to search through:
+
+```{r}
+
+x <- 1:7000
+ntree <- x[x%%50 == 0]
+mtry <- c(1:length(bagtest))
+x <- 1:100
+nodesize <- x[x%%5==0]
+nPerm <- 1:3
+init <- list(
+             ntree=ntree,
+             mtry = mtry,
+             nodesize = nodesize
+)
+grid <- expand.grid(init, stringsAsFactors = FALSE)
+dim(grid)
+```
+
+We will be running about 20,000 random forests, so it is probably best we do our grid search in parallel, in order to save time and be efficient. My computer has 12 cores, lets use all of them:
+
+```{r, eval = F}
+workers <- makeCluster(12L)
+invisible(clusterEvalQ(workers, library(randomForest)))
+invisible(clusterEvalQ(workers,set.seed(19)))
+registerDoParallel(workers)
+```
+
+### Running the grid search
+
+We will use the `doParallel` and `forEach` libraries to do this in parallel, and run the search:
+
+```{r, eval = F}
+
+gridSearch <- foreach(i = 1:nrow(grid), .combine = rbind) %dopar% {
+  model <- randomForest(ppm ~ .,
+                        data = bagval3,
+                        ntree = grid[i,1], 
+                        mtry = grid[i,2], 
+                        nodesize = grid[i,3],
+  )
+  preds <- predict(model, bagtest3)
+  ASE <- mean((bagtest3$ppm - preds)^2)
+  data.frame(ASE = ASE, 
+       ntree = grid[i,1], 
+       mtry = grid[i,2], 
+       nodesize = grid[i,3]
+  )
+}
+```
+
+Lets check it out:
+
+```{r}
+gridSearch %>% arrange(ASE)
+```
+
+## Using the Tuned Model
+
+Due to the inherently random nature of the random forest, the results may vary from time to time, but in general they should be excellent. Train our final random forest model and make a prediction:
+
+```{r, eval = F}
+
+
+```
+
+
+
+
 
 # Reproducing this analysis
 

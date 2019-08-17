@@ -1,0 +1,1873 @@
+---
+title: "Time Series Project: Analysis of PM2.5 in Beijing"
+author: "David Josephs"
+date: "`r Sys.Date()`"
+output: 
+  html_document:
+    toc: TRUE
+    number_sections: true
+    toc_float:
+      collapsed: true
+      smooth_scroll: false
+    theme: paper
+    df_print: paged
+    keep_md: TRUE
+---
+
+```{r setup, echo = F}
+if (knitr::is_latex_output()) {
+	knitr::opts_chunk$set(dev = "tikz")
+}
+knitr::opts_knit$set(root.dir = '../..')
+knitr::opts_chunk$set(warning = F)
+knitr::opts_chunk$set(message = F)
+knitr::opts_chunk$set(tidy = T)
+knitr::opts_chunk$set(fig.align = "center")
+knitr::opts_chunk$set(comment = '#>')
+knitr::opts_chunk$set(fig.path = 'fig/')
+options(scipen = 999)
+```
+# Project Overview
+
+A common time series problem that you see papers about all the time is predicting air quality from sensor data. In this project, I propose and implement a new model to do 3-day ahead forecasts of hourly air quality data in Beijing. The proposed model is an ensemble of 5 models, discussed below:
+
+## Model 1: Regression with autocorrelated errors
+
+In order to deal with the complex seasonality of hourly data (typically it exhibits a daily, weekly, and yearly seasonality), I used fourier expansions of the three possible seasonalities within the dataset (24 hours, `r 24*7` hours, and `r 24*7*365` hours) as external regressors, with autocorrelated errors (using `auto.arima`).
+
+## Model 2: TBATS
+
+In another attempt to deal with the complex seasonality, I tried a model I had never heard of which is becoming popular for complex seasonality series: TBATS. It decomposes the data, represents the seasonality as a fourier expansion, autocorellates the errors, and estimates the trend with damping (it also implements a box-cox transformation if the algorithm deems that appropriate).
+
+## Model 3: VAR
+
+The first multivariate model, VAR was used with exogenous regressors (in this case, dummies for daily and nightly, as many papers I read had done the same and my EDA agreed with that).
+
+## Model 4: NNETAR
+
+Instead of using `nnfor`, which for my massive amount of data, was astoundingly slow (calculated for over 18 hours, no luck), `nnetar` from the `forecast` library was used. Nnetar is still a feed-forward neural network, much like the `mlp` function, but is not as customizable, but far more user friendly (and far faster). We are saving our user unfriendly model for the last one!
+
+[reference](https://kourentzes.com/forecasting/2017/02/10/forecasting-time-series-with-neural-networks-in-r/)
+[reference](http://freerangestats.info/blog/2016/11/06/forecastxgb)
+
+## Model 5: LSTM
+
+This is the pride and joy of this report. A RNN, specifically the Long Short-Term Memory (LSTM) was used. LSTMs are frequently used in forecasting hourly air quality, as they perform exceptionally well. This was the case here too. The model architecture is presented below
+
+```{r, echo = F}
+library(keras)
+load_model_hdf5("analysis/hourly/lstm.h5")
+```
+
+We will now walk through the model architecture. First, the data goes into the first LSTM, which has 10 nodes in the hidden layer, activates using the `sigmoid` function, and then enters the first `bidirectional` LSTM. A bidirectional LSTM actual consistsof two duplicate LSTMs, the first of which data is read in proper time order, that is from beginning to end. In the second, the data is read in backwards. Then, the results of these are combined. What this does is it allows the LSTM to recognize not only subtle short term trends and patterns, but very deep and interesting long term patterns. 
+
+The first bidirectional LSTM has 80 hidden nodes total, 40 in each direction. The second bidirectional LSTM has 160 nodes, 80 in each direction. 
+
+After passing through the first three layers, the data is then pumped into a standard, feed forward neural network (single node) to revert it to a vector.
+
+[Amazing primer on LSTMs](https://skymind.com/wiki/lstm#feedforward)
+
+[Reference I used throughout the process](https://www.amazon.com/Deep-Learning-R-Francois-Chollet/dp/161729554X)
+
+## A Note
+
+Although this paper is relatively short, every model in this paper is a result of *a lot* of work. Overall, well over 2000 models (at least 1000 of those LSTMs, and countless hours of `aic5.wge`) were trained. If you are interested in exploring the process in greater depth, please see the `analysis/hourly/` directory of this repository (there is also some interesting stuff in `analysis/daily`, but those forecasts were fundamentally flawed)
+
+## Ensembling Method: Stochastic Gradient Boosting
+
+To ensemble these series together, I used gradient boosting. Gradient boosting is frequently used as an ensembling method in normal machine learning, and in recent literature it has been shown that it is an extremely powerful ensembling method for time series as well. [This paper](https://res.mdpi.com/data/data-04-00015/article_deploy/data-04-00015.pdf?filename=&attachment=1) not only references the validity of this approach, but also describes an even cooler, double ensemble method, where ensemble models are ensembled together to produce a very accurate model.
+
+# Data Preprocessing
+
+## Data Definition
+
+Open to the public is data from 5 cities:
+
+* Beijing
+
+* Chengdu
+
+* Guangzhou
+
+* Shanghai
+
+* Shenyang
+
+Each of these datasets contains:
+
+* Air quality measurements at multiple locations (including a US Embassy post)
+
+* Humity
+
+* Air pressure
+
+* Temperature
+
+* Precipitation
+
+* Wind direction
+
+* Wind Speed
+
+Measured at every hour. For detailed info on the data quality and collection methods, please refer to [this publication](https://agupubs.onlinelibrary.wiley.com/doi/full/10.1002/2016JD024877)
+
+## Data processing pipeline
+
+Before we can start analyzing, we must load our data in. Below we see a series of funtions which loads a directory containing time series data, counts the NAs, imputes them with `spline` interpolation (from the imputeTS) package, and then puts them in a convenient hash table for fast access:
+
+```{r preproc}
+library(functional) # to compose the preprocessing pipeline
+library(data.table)# to read csvs
+library(rlist) # for list manipulations
+library(pipeR) # fast %>>% dumb %>>% pipes
+library(imputeTS) # to impute NAs
+library(pander) # so i can read the output
+library(foreach) # go fast
+library(doParallel) # go fast
+
+import <- function(path){
+  # first we list the files in our path, in this case "data/"
+  files <- list.files(path)
+  # then we search for csvs
+  files <- files[grepl(files, pattern = ".csv")]
+  # paste the csv names onto the filepath(data/whatever.csv)
+  filepaths <- sapply(files, function(x) paste0(path,x))
+  # read them in to a list
+  out <- lapply(filepaths, fread)
+  # Get rid of .csv in each filename
+  fnames <- gsub(".csv","",files)
+  # get rid of the confusing numbers
+  fnames <- gsub("[[:digit:]]+","", fnames)
+  # set the names of the list to be the clean filenams
+  names(out) <- fnames
+  out
+}
+
+naCount <- function(xs){
+  rapply(xs, function(x) sum(is.na(x)/length(x)), how = "list")
+}
+# load in the data now
+datadir = "data/"
+china <- import(datadir)
+pander(naCount(china))
+
+# convert a vector to a time series object
+tots <- function(v){
+  ts(v, frequency = 365*24)
+}
+
+# apply that function to single data frame, ignoring the categorical columns
+
+totslist <- function(df){
+  # define the column names which we do not want to alter
+  badlist <- c(
+               "No",
+               "year",
+               "month",
+               "day",
+               "hour",
+               "season",
+               "cbwd"
+  )
+  # get the column names of the original data frame
+  nms <- colnames(df)
+  # coerce it into a list
+  df <- as.list(df)
+  # if the name of the item of the list is in our
+  # to not change list, do nothing
+  # otherwise, convert to ts
+  for (name in nms){
+    if (name %in% badlist){
+      df[[name]] <- df[[name]]
+    } else {
+      df[[name]]  <- tots(df[[name]])
+    }
+  }
+  # return the created list
+  df # its a list dont be tricked
+}
+
+# scale this function to a list of data frames (i intend eventually to predict air quality in each of these cities)
+
+totsall <- function(xs){
+  lapply(xs, totslist)
+}
+
+# use the try catch pattern to impute the NAs of every time series in the list of data frames
+
+
+imp_test <- function(v){
+  out <- try(na.interpolation(v, "spline"))
+  ifelse(
+         is.ts(out),
+         return(out),
+         return(v)
+  )
+}
+
+
+impute <- function(xs){
+  foreach(i = 1:length(xs),
+          .final = function(x){
+            setNames(x, names(xs))
+          }) %dopar% 
+  imp_test(xs[[i]])
+}
+
+
+impute_list <- function(xs){
+  lapply(xs, impute)
+}
+
+# convert anything to a hash table
+
+to_hash <- function(xs){
+  list2env(xs, envir = NULL, hash = TRUE)
+}
+
+# combine everything into one function with functional's compostion tool
+preprocess <- Compose(import, totsall, impute_list, to_hash)
+```
+
+# Univariate EDA
+Now we are ready for some EDA, we would like to analyze for any seasonal patterns, as well as the standard wge sample plots
+
+```{r}
+library(ggthemes)
+library(ggplot2)
+library(cowplot)
+
+# steal functions from other libraries
+seasonplot <- forecast::ggseasonplot
+subseriesplot <- forecast::ggsubseriesplot
+lagplot <- forecast::gglagplot
+sampplot <- tswge::plotts.sample.wge
+# clean up errant data points
+clean <- forecast::tsclean
+
+# resample a time series to different sample rates
+# note this is a function that generates functions
+
+
+change_samples <- function(n){
+  function(xs){
+    out <- unname(tapply(
+                         xs,
+                         (seq_along(xs)-1) %/% n,
+                         sum
+                         ))
+    out <- ts(out, frequency = (8760/n))
+    out
+  }
+}
+
+# daily and weekly sampling, monthly is 4 weeks
+to_daily <- change_samples(24)
+to_weekly <- change_samples(24*7)
+to_monthly <- change_samples(24*7*4)
+to_season <- change_samples(24*(365/4))
+
+# pipelining final cleaning and conversion, removing outlier and the couple of errant negative values (which do not make sense)
+cleandays <- function(xs) {
+  xs %>>% clean %>>% abs %>>% to_daily
+}
+
+cleanweeks <- function(xs) {
+  xs %>>% clean %>>% abs %>>% to_weekly
+}
+cleanmonths <- function(xs) {
+  xs %>>% clean %>>% abs %>>% to_monthly
+}
+cleanseas <- function(xs) {
+  xs %>>% clean %>>% abs %>>% to_season
+}
+
+# resample the whole ts 
+resample <- function(xs){
+  xs %>>% cleandays %>>% window(end = 6) -> day
+  xs %>>% cleanweeks %>>% window(end = 6) -> week
+  xs %>>% cleanmonths %>>% window(end = 6) -> month
+  xs %>>% cleanseas %>>% window(end = 6) -> seas
+  list(day = day, week = week, month = month, season = seas)
+}
+
+```
+
+## Sample plots
+
+It is important to note that looking at the raw data, nothing useful is found, there is simply too much data.
+
+```{r}
+china <- preprocess(datadir)
+bj <- china$BeijingPM_$PM_US
+
+# this takes a long time, and we are using it only once
+# so we wil just load it like this
+# bj <- resample(bj)
+# save(bj, file = "resampled.Rda")
+load("pres/resampled.Rda")
+
+dy <- sampplot(bj$day)
+```
+
+The ACF appears to have a wandering behavior, but the parzen window, logic, and the the scatterplot tell us differently, it is likely there is a longer seasonality in this noisy data, lets look at weekly, monthly, and quarterly data to confirm this:
+
+```{r}
+
+wy <- sampplot(bj$w)
+
+my <- sampplot(bj$m)
+
+sy <- sampplot(bj$s)
+```
+
+## Seasonal Plots
+
+This shows clear complex seasonal patterns in the data
+
+```{r}
+sda <- seasonplot(bj$day) + 
+  scale_color_hc() + theme_hc() + 
+  ggtitle("Seasonal plot: Daily")
+sdw <- bj$week %>>% seasonplot + 
+  theme_hc() + scale_color_hc()+
+  ggtitle("Seasonal plot: Weekly")
+sdm <- bj$month %>>% seasonplot + 
+  theme_hc() + scale_color_hc()+
+  ggtitle("Seasonal plot: Monthly")
+sds <- bj$seas %>>% seasonplot + 
+  theme_hc() + scale_color_hc()+
+  ggtitle("Seasonal plot: Quarterly")
+plot_grid(sda, sdw, sdm, sds, ncol=2 )
+```
+
+This long term seasonality is because every winter, Beijing-dwellers use central heating, causing pollution to spike.
+
+# Classical Univariate Analysis
+
+## S3 methods and classes
+
+First we define a generic method for scores, and define 3 scoring methods: ASE, MAPE, and number of points of the test set within the confidence interval. We also define the `wge` class and provide `autoplot` and `scores` methods:
+
+```{r}
+library(tswgewrapped) # utility functions for tswge I wrote
+scores <- function(obj){
+  UseMethod("scores")
+}
+
+ASE <- function(predicted, actual){
+  mean((actual -predicted)^2)
+}
+
+MAPE <- function(predicted, actual){
+  100*mean(abs((actual-predicted)/actual))
+}
+
+
+checkConfint <- function(upper,lower, actual){
+  (actual < lower) | (actual > upper)
+}
+
+confScore <- function(upper, lower, actual){
+  rawScores <- ifelse(
+    checkConfint(upper,lower,actual),
+    1,
+    0
+  )
+  return(sum(rawScores)/(length(actual))*100)
+}
+
+# plot a list of data frames, test and predictions
+.testPredPlot <- function(xs){
+  p <- ggplot() + theme_hc() + scale_color_hc()
+  doplot <- function(df){
+    p <<- p + geom_line(data = df,
+                        aes(
+                            x = t,
+                            y = ppm,
+                            color = type
+                            ))
+  }
+  out <- lapply(xs, doplot)
+  out[[2]]
+}
+
+# wge class
+as.wge <- function(x) structure(x,class = "wge")
+
+# scoring methods for wge objects
+scores.wge <- function(xs){
+  mape <- MAPE(xs$f,testU)
+  ase  <- ASE(xs$f,testU)
+  confs <- confScore(xs$ul, xs$ll,testU)
+  c("ASE" = ase, "MAPE" = mape, "Conf.Score" = confs)
+}
+
+# plotting methods for wge objects
+autoplot.wge <- function(obj){
+  testdf <- data.frame(type = "actual", 
+                       t = seq_along(testU), 
+                       ppm = as.numeric(testU))
+  preddf <- data.frame(type = "predicted", 
+                       t = seq_along(obj$f), 
+                       ppm = as.numeric( obj$f ))
+  confdf <- data.frame(upper = obj$ul, lower = obj$ll, t = seq_along(testU))
+  dfl <- list(preddf,testdf)
+  .testPredPlot(dfl) + 
+    geom_line(data = confdf,aes(x = t, y = lower, alpha = 0.2), linetype = 3003) + 
+    geom_line(data = confdf,aes(x = t, y = upper, alpha = 0.2), linetype = 3003) + 
+    guides(alpha = FALSE)
+}
+```
+
+And then we do our analysis
+
+## A note
+
+ARUMA, ARIMA, airline, and ARMA models were tested. We are only presenting here the best ARUMA model we could make, as none of these models were as appropriate, in my eyes, as the model presented. Please see `analysis/hourly/classicalHourly.R for more`
+
+## Analysis
+```{r}
+# data loading
+bj <- preprocess("data/")
+bj <- bj$BeijingPM_ %>>% as.data.frame
+uvar <- bj$PM_US.Post
+uvar <- uvar %>>% forecast::tsclean() %>>% abs
+trainU <- window(uvar,start = 3, end = c(6, 8760-48))
+testU <- window(uvar, start = c(6, 8760-48))[-1]
+
+# no smoke and mirrors, just a wrapper for phi.tr
+difference
+train7 <- difference(seasonal, trainU, 24*7)
+```
+
+It does not appear to do much, but it is the most useful model we can make, we will model the rest of the data as a high order AR model. The data appears to exhibit heteroskedasticity, or still a large seasonal pattern. Could not find a way to make it stationary
+
+```{r, echo = F}
+# so i dont have to calculate aic5.wge while i knit
+load("analysis/hourly/classical.Rda")
+```
+
+```{r, eval = F}
+aic72 <- aic5.wge(train7, p = 0:8, q = 0:5, type = "aicc")
+```
+
+```{r}
+aic72
+```
+
+Next we estimate the parameters:
+
+```{r}
+# a wrapper for basically est.ar and est.arma
+estimate
+est7 <- estimate(train7, 6,0)
+phis <- est7$phi
+data.frame(t(data.frame(phis, row.names  = sapply(1:6, function(x) paste0("phi",x)) )), row.names = NULL)
+```
+
+Next, we try to see if we can generate similar time series to ours:
+
+```{r}
+# combines all the gen....wges
+generate
+recreate <- generate(arma, length(trainU), phi = phis,plot = F, sn = 34541)
+par(mfrow = c(1,2))
+plot(recreate, type = "l")
+plot(train7, type = "l")
+```
+
+Checking for model completeness
+
+```{r}
+acf(est7$res)
+```
+
+ACF is not outrageous, but not brillant either
+
+```{r}
+# follows the recommend values of K
+ljung_box
+ljung_box(est7$res,6,0)
+``` 
+
+Our model is not a very appropriate one, but it is the absolute best we can do with this dataset. Lets Forecast now:
+
+```{r}
+# wrapper for fore.....wge
+fcst
+
+seafor <- fcst(aruma, s = 24*7, phi = est7$phi, theta = 0, n.ahead = 72, x = trainU)
+```
+
+Next lets assess the model:
+
+```{r}
+seaF <- as.wge(seafor)
+autoplot(seaF)
+as.data.frame(t(scores(seaF)))
+```
+
+It did astoundingly well given the horrible residuals of our estimation. This will be an excellent benchmark.
+
+# Autocorrelated errors regression
+
+First, we will write some functions and make some S3 methods, as well as convert our data to MSTS:
+
+```{r}
+library(forecast)
+# convert to MSTS
+toMsts <- function(x){
+  msts(x, seasonal.periods = c(24,24*7, 8760))
+}
+
+trainU <- toMsts(trainU)
+testU <- toMsts(testU)
+
+# casting and methods
+as.fore <- function(x) structure(x, class = "fore")
+
+autoplot.fore <- function(obj){
+  testdf <- data.frame(type = "actual", 
+                       t = seq_along(testU), 
+                       ppm = (testU))
+  preddf <- data.frame(type = "predicted", 
+                       t = seq_along(testU), 
+                       ppm = ( obj$mean[1:length(testU)] ))
+
+  confdf <- data.frame(upper = obj$upper[1:length(testU),2], lower = obj$lower[1:length(testU),2], t = seq_along(testU))
+  dfl <- list(preddf,testdf)
+  .testPredPlot(dfl)+ geom_line(data = confdf, aes(x = t, y = lower, alpha = 0.2), 
+         linetype = 3003) + geom_line(data = confdf, aes(x = t, y = upper, alpha = 0.2), 
+         linetype = 3003) + guides(alpha = FALSE)
+ }
+
+scores.fore <- function(obj){
+  mape <- MAPE(as.numeric(obj$mean[1:length(testU)]), as.numeric(testU))
+  ase <- ASE(as.numeric(obj$mean[1:length(testU)]), as.numeric(testU))
+  confs <- confScore(as.numeric(obj$upper[1:length(testU),2]), as.numeric(obj$lower[1:length(testU),2]), as.numeric(testU))
+  c("ASE" = ase,"MAPE" = mape,  "Conf.Score" = confs)
+}
+```
+
+## Fourier expansion
+
+Here we can demonstrate the fourier expansion of the series, to show that it is appropriate.
+
+```{r}
+library(tidyverse)
+
+exampleFourier <- fourier(testU, K = c(10,20,100))
+library(dplyr)
+exampleFourier %>% data.frame %>% dplyr::select(ends_with("24")) -> shortEx
+exampleFourier %>% data.frame %>% dplyr::select(ends_with("168")) -> midEx
+exampleFourier %>% data.frame %>% dplyr::select(ends_with("8760")) -> longEx
+pls <- data.frame(rowSums(shortEx), rowSums(midEx), rowSums(longEx), testU)
+par(mfrow = c(2,2))
+walk(pls, plot, type = "l")
+
+```
+
+It is somewhat clear (at least to me) that some combination of these could represent our series really well. Next, lets fit the model and make a forecast ***WARNING*** This takes about 6 hours on my computer (with 12 cores). Do not run on your own. 
+
+## Analysis
+
+```{r, echo = F}
+load("analysis/hourly/mseaday.Rda")
+```
+
+Lets first do a fourier expansion of our test set:
+
+```{r}
+trainExpand <- fourier(trainU, K = c(10,20,100))
+```
+
+Next lets run our model. Please note that we set seasonal = FALSE, as we are actually using our seasonal patterns as a regressor. We also set lambda = 0, which indicates we are going to do a Box-Cox transformation with lambda = 0, AKA a log transform. This keeps our forecasts from being negative ever.
+
+```{r, eval = F}
+mseaDay <- auto.arima(trainU, xreg = trainExpand, seasonal = FALSE, lambda = 0)
+
+# these indexes just work because of our split
+mseasFor <- forecast(mseaDay, xreg = trainExpand[(nrow(trainExpand)-71):(nrow(trainExpand)),])
+```
+
+We can check out the chosen unit roots with autoplot
+
+```{r}
+autoplot(mseaDay)
+```
+
+Looks like we have AR(5) errors, with our multiple seasonalities. The roots are well within the unit circle, which is great
+
+Lets take a look
+
+```{r}
+autoplot(mseasFor)
+```
+
+This is not visible at all, lets make a longer forecast to see how it looks
+
+
+```{r}
+forecast(mseaDay, xreg = trainExpand[1:(8760/2),]) %>% autoplot
+```
+
+Wow, this looks really good. Lets assess our actual forecast now:
+
+```{r}
+autoplot(as.fore(mseasFor))
+data.frame(t(scores(as.fore(mseasFor))))
+```
+
+
+It appears that we did not capture as much of the variance as ARUMA, but we captured a lot more the smooth parts of the time series, especialy that lower trough. The ASE is super comparable to the ARUMA model, but this one is far more appropriate.
+
+# TBATS
+
+[what is tbats](https://medium.com/intive-developers/forecasting-time-series-with-multiple-seasonalities-using-tbats-in-python-398a00ac0e8a)
+
+## Analysis
+
+Note we do not need any new s3 methods for tbats
+
+
+```{r, eval = F}
+cores <- parallel::detectCores()
+#> [1] 12
+bjbats <- tbats(trainU, use.parallel = TRUE, num.cores=cores-1)
+```
+
+```{r, echo = F}
+load("analysis/hourly/tbats.Rda")
+```
+
+```{r}
+autoplot(bjbats)
+```
+
+
+This is interesting too, so we see the I think trend that the algorithm smoothed out of the time series, as well as the seasonal fourier series it made. Lets check out that forecast:
+
+
+```{r}
+batF <- forecast(bjbats, h = 72)
+autoplot(batF)
+```
+
+Looks like we cant see our forecast at all. Lets try zooming in on this with our autoplot method:
+ 
+
+```{r}
+autoplot(as.fore(batF))
+```
+
+This is an interesting forecast. Looks like it kind of smoothed out the trend of the time series as a whole. Lets look to assess how it did:
+
+
+```{r}
+scores(as.fore(batF)) %>% t %>% data.frame
+```
+
+This also seems to be on par with the past few models we've made. It does the poorest job of capturing the variance of the data however (albeit with extremely nice confidence limits).
+
+# Univariate model comparison
+
+
+```{r}
+batCast <- as.fore(batF)
+arumaCast <- as.wge(seafor) 
+harmonCast <- as.fore(mseasFor) 
+autoplot(harmonCast)
+seriesL <- list(tbats  =  batCast, aruma =  arumaCast, harmonic =  harmonCast)
+vapply(seriesL, scores, FUN.VALUE = double(3)) %>% t %>% data.frame
+```
+
+
+We can see the results of our performance very nicely in the table above. We see that the TBATS forecast performed worse than the the ARUMA and harmonic forecasts, but the prediction interval of the harmonic forecast was the least useful. The harmonic forecast was off by the least in general (MAPE), but did not capture the big movements (ASE), so it missed big a few times. In contrast, the ARUMA forecast was in general less close to the truth (MAPE), but captured the extreme cases much more nicely(ASE). 
+
+To get closer to the truth, let us now examine the time series with other variables, to see if they can help us make an even better forecast:
+
+
+# Multivariate Setup
+
+```{r}
+# first we grab the data columns we want, we only want PM_US.Post of the PM25 variables
+bj <- bj %>% dplyr::select(-c(No, starts_with('PM_D'), starts_with('PM_N')))
+
+# Next, we write a function which makes a multivariate time series data frame
+# we cannot just do [,] indexing, as it will break the `ts` class
+# instead we have a function which assigns the values we want to our global environment:
+
+splitMvar <- function(start=3, end =c(6, 8760-48)){
+  startInd <- length(window(bj$PM_US, end = start))
+  endInd <- length(window(bj$PM_US, end = end))
+  bjnots <- purrr::discard(bj, is.ts)
+  bjnots <- data.frame(lapply(bjnots, as.factor))
+  bjts <- purrr::keep(bj, is.ts)
+  bjts$PM_US.Post <- uvar # just because it is already cleaned
+  notstrain <- bjnots[startInd:endInd,]
+  tsTrain <- data.frame(lapply(bjts, function(x) window(x, start = start, end = end)))
+  trainM <<- cbind(tsTrain, notstrain)
+  notstest <- bjnots[(endInd+1):nrow(bjnots), ]
+  tsTest  <- data.frame(lapply(bjts, function(x) window(x, start = c(6,8760-47))))
+  testM <<-cbind(tsTest, notstest)
+}
+splitMvar()
+trainM
+testM
+
+# double check
+
+sum(abs(as.numeric(testM$PM_US) - as.numeric(testU)))
+nrow(testM)-length(testU)
+sum(abs(trainM$PM_US - trainU))
+nrow(trainM)-length(trainU)
+```
+
+# Multivariate EDA
+
+
+```{r, results = "hide"}
+library(tidyverse)
+plotAllTs <- function(df){
+  tsdf <- keep(df, is.ts)
+  lapply(tsdf, function(x) autoplot(x) + theme_hc())
+}
+plot_grid(plotlist = plotAllTs(trainM), labels = names(keep(trainM, is.ts)))
+```
+
+
+We already learned some interesting stuff. First of all, precipitation does not seem to be in any way similar to our dataset. So, we probably wont use it as a predictor, as it also does not make logical sense. Of all the time seres here, humidity appears to have a similar trend pattern to our target. Pressure looks similar but a bit off, so at a high lag maybe it is interesting. Dewpoint has the wrong period, and is a function of temperature and humidity, so most likely it does not provide us with any interesting information.
+
+
+## Analysis of Categorical Variables:
+
+Lets see how each of the categorical variables affect our air content:
+
+```{r}
+catTable <- function(cat){
+  trainM %>% arrange(!!sym(cat)) %>% 
+    group_by(!!sym(cat)) %>%
+    summarise(meanPPM = mean(PM_US.Post))
+}
+
+map(names(discard(trainM, is.ts)), catTable) %>% pander
+```
+
+There are a few variables which stand out, namely hour, season, and cbwd (wind direction). Hour appears to be a daily and nigthly pattern, where at night, the average PPM goes up. Lets create a new categorical variable for daytime nighttime:
+
+```{r}
+library(forcats)
+hoursToDayNight <- function(df){
+  df[["hour"]] %>% 
+    fct_collapse(
+                 night =  c(as.character(18:23), as.character(0:5)), 
+                 day = as.character(6:17))
+}
+
+trainM$dayNight <- hoursToDayNight(trainM)
+testM$dayNight <- hoursToDayNight(testM)
+catTable("dayNight")
+```
+
+A noticeable change between day and night (you could say a day and night difference). This will be an absolutely useful factor. As for wind direction, we have a lot of NAs, and we only have 4 wind directions, so that may not be so useful.
+
+## Another look at numeric variables
+
+
+```{r, cache =  TRUE}
+plotVsResponse <- function(x){
+  plot(trainM$PM_US.Post ~ trainM[[x]], xlab = x)
+  lw1 <- loess(trainM$PM_US.Post ~ trainM[[x]])
+  j <- order(trainM[[x]])
+  lines(trainM[[x]][j],lw1$fitted[j],col="red",lwd=3)
+}
+trainM2 <- trainM %>% select(-contains("prec")) # precipitation is all 0
+trainM2 %>% keep(is.numeric) %>% names %>% walk(plotVsResponse)
+```
+
+All of these variables appear to have some sort of relationship with the air quality, so we will have to investigate further. 
+
+## CCF analysis
+
+Lets look at the cross correlation between all the useful variables next:
+
+```{r, cache = TRUE}
+ppm <- trainM$PM_US.Post
+ccfPlot <- function(x){
+  ccf(ppm,trainM[[x]],main = x)
+}
+trainM2 %>% keep(is.numeric) %>% names %>% walk(ccfPlot)
+```
+
+It appears we have a very complex correlation structure. It is important to note that the cross correlation of dewpoint does look like some sort of combination of humidity and temperature, which makes physical sense. Now that we have completed our EDA, lets go ahead and get to doing analysis.
+
+# Multivariate data prep
+
+Lets update our split funciton to include encoded day night factors, and we can get rid of the dummies, which werent that helpful as seasonality is already encoded in the `ts` class (which all of our models that care use)
+
+```{r}
+
+hoursToDayNight <- function(df){
+  df[["hour"]] %>% 
+    fct_collapse(
+                 night =  c(as.character(18:23), as.character(0:5)), 
+                 day = as.character(6:17)) %>% as.numeric %>% `-`(1)
+}
+
+splitMvar <- function(start=3, end =c(6, 8760-48)){
+  startInd <- length(window(bj$PM_US, end = start))
+  endInd <- length(window(bj$PM_US, end = end))
+  bjnots <- purrr::discard(bj, is.ts)
+  bjnots <- data.frame(lapply(bjnots, as.factor))
+  bjnots$dayNight <- hoursToDayNight(bjnots)
+  bjts <- purrr::keep(bj, is.ts)
+  bjts$PM_US.Post <- uvar # just because it is already cleaned
+  notstrain <- bjnots[startInd:endInd,]
+  tsTrain <- data.frame(lapply(bjts, function(x) window(x, start = start, end = end)))
+  trainM <<- cbind(tsTrain, notstrain)
+  notstest <- bjnots[(endInd+1):nrow(bjnots), ]
+  tsTest  <- data.frame(lapply(bjts, function(x) window(x, start = c(6,8760-47))))
+  testM <<-cbind(tsTest, notstest)
+  trainM[c(7:14)] <<- NULL
+  testM[c(7:14)] <<- NULL
+}
+splitMvar()
+head(trainM)
+```
+
+# VAR
+
+Our first multivariate technique is going to be VAR. One of the interesting properties of VAR is what it means about the data. VAR is telling us that our time series are *endogenous*, that is to say that they all affect each other. Now with our weather patterns, this makes sense. Weather is a complex, dynamic system of complex feedback cycles, so it is natural that all the weather variables are endogenous to each other. However; let us discuss how our air particulate content relates to the weather, to determine weather a VAR model is physically appropriate
+
+## Discussion of Appropriateness
+
+In this section we will discuss how each of our weather patterns interplay (or dont) with our air quality.
+
+### Humidity
+
+#### Effect of Humidity on Air Quality
+
+Humidity has a strong effect on air quality. On a humid day, water in the air will "stick" to air particulates. This weighs them down and makes them much larger, causing them to stick around for longer. This will cause the air particulates to hang around in one place. 
+
+It is also important to note that this has an effect on temperature. When water sticks to air pollution, energy from the sun is reflected off of the water, imparting a bit of energy to the water and spreading the sunlight some more. This adds to the haze appearance when there is a lot of pollution. Over time, due to water's high specific heat, should cause the air to heat up, as the small amount of extra energy stored in the water attached to the pollution will be transferred quickly to the air. (Note this should also have an affect on pressure slowly, because $P \propto T$).
+
+#### Effect of Air Quality on Humidity
+
+Surprisingly, air quality also has a positive feedback with humidity. This is due to the "sticking" effect we discussed earlier. Heavy air particulate matter with water attached causes other air particles to stick around too. You can actually prove this with an experiment.
+
+
+Supplies
+
+* An aerosol, such as hairspray
+
+* A jar with a lid
+
+* Ice
+
+* Warm water
+
+Take the warm water and put it in your jar. Put the lid on upside down with ice in it, for about 30 seconds (this causes the evaporated water in the air to condense a bit, raising the humidity). 
+
+Now, lift the ice lid up, and spray a tiny bit of your aerosol in the jar and quickly replave the ice lid. 
+
+Then, watch a cloud form inside the jar.
+
+You can do this experiment with any air particulate, for example smoke from a match also works nicely.
+
+It is safe to say that a bidirectional VAR forecast of humidity is appropriate.
+
+
+
+### Temperature
+
+#### How Temperature Relates to Surface Air Quality
+
+Temperature has a clear effect on air quality. Not only does cold air cause air particulates to stick around more (slower moving), but also more condensed water particles in the air, which we already know about.
+
+Similarly, in the winter, tropospheric temperature inversions can occur when the stratosphere (think, up high) gets heated more than the troposphere (we live here). Normally, the air naturally convects because it is hotter in the troposphere than the stratosphere, but in the winter, with our long nights, the opposite can occur. This is a temerature inversion. This causes the convection to stop, and the air to remain trapped there. This traps the pollutants in the same place, and causes them to accumilate
+
+#### Effect of air quality on temperature
+
+The air quality + humidity should have a slight effect on temperature, but global weather patterns are more powerful
+
+#### Discussion
+
+It is appropriate to say that temperature affects air quality, but only slightly appropriate to say the opposite
+
+### Dewpoint
+
+Dewppoint is simply a function of humidity and temperature, so this variable will not be included in our model, as it is simply overfitting.
+
+### Wind speed
+
+This is a complex relationship, but basically it does have some sort of complex relationship with air pollution. When it is windy, pollutants can be moved thousands of miles, while when it is still, they can accumulate. So it depends, but it does have an effect. Heavy particulte matter may also slow the wind down, but it is unclear and unproven. Overall though, it is somewhat appropriate to do this bidirectional forecast.
+
+### Pressure
+
+Given the complex relationship between pressure, temperature, humidity, and wind speed, which are all somewhat related to air quality in interesting ways, it is safe to include pressure in our VAR models as well
+
+### Precipitation
+
+No matter how much i think, I cannot say that you can predict surface air quality with precipitation or vice versa, so this is likely inappropriate
+
+## Analysis
+
+First, we break our sets into exogenous and endogenous sets, as well as write a dummy variable generator for our prediction
+
+```{r}
+vartrain <- trainM %>% dplyr::select(-c(dayNight))
+varexo <- matrix(trainM$dayNight, dimnames = list(NULL, "dayNight"))
+
+makeExo <- function(n){
+  day <- c(rep(0,5), rep(1,12), rep(0,7))
+  return(matrix(rep(day,n), dimnames = list(NULL, "dayNight")))
+}
+```
+
+Next, lets write our standard s3 methods for VAR
+
+```{r}
+as.var <- function(x) structure(x, class = "var")
+autoplot.var <- function(obj){
+  us <- obj$fcst$PM_US.Post
+  testdf <- data.frame(type = "actual", 
+                       t = seq_along(testM$PM_US.Post), 
+                       ppm = as.numeric(testM$PM_US.Post))
+  preddf <- data.frame(type = "predicted", 
+                       t = seq_along(testM$PM_US.Post), 
+                       ppm = ( obj$fcst$PM_US.Post[,1]))
+  dfl <- list(testdf,preddf)
+  confdf <- data.frame(t = seq_along(testM$PM_US.Post), upper = us[,3], lower = us[,2])
+  .testPredPlot(dfl)+ geom_line(data = confdf, aes(x = t, y = lower, alpha = 0.2), 
+         linetype = 3003) + geom_line(data = confdf, aes(x = t, y = upper, alpha = 0.2), 
+         linetype = 3003) + guides(alpha = FALSE)
+}
+scores.var <- function(obj){
+  mape <- MAPE(obj$fcst$PM[,1], testM$PM_US)
+  ase <- ASE(obj$fcst$PM[,1], testM$PM_US)
+  us <- obj$fcst$PM_US.Post
+  conf  <- confScore(upper = us[,3], lower = us[,2], testM$PM_US)
+  c("ASE" = ase,"MAPE" = mape , "Conf.Score" = conf)
+}
+```
+
+
+### Linear Modeling
+
+An important part in choosing variables for VAR is to model our data in the same fassion as a linear model (for reference on how to choose variables for VAR, please refer to [this link](https://cran.r-project.org/web/packages/vars/vignettes/vars.pdf)).
+
+```{r}
+summary(lm(trainM))
+```
+
+We see here that while all our predictors are important, dewpoint isnt that important. So, lets remove that from our function, so that next time we dont even look at it, and lets remove it from the sets we are about to use:
+
+```{r}
+
+splitMvar <- function(start=3, end =c(6, 8760-48)){
+  startInd <- length(window(bj$PM_US, end = start))
+  endInd <- length(window(bj$PM_US, end = end))
+  bjnots <- purrr::discard(bj, is.ts)
+  bjnots <- data.frame(lapply(bjnots, as.factor))
+  bjnots$dayNight <- hoursToDayNight(bjnots)
+  bjts <- purrr::keep(bj, is.ts)
+  bjts$PM_US.Post <- uvar # just because it is already cleaned
+  notstrain <- bjnots[startInd:endInd,]
+  tsTrain <- data.frame(lapply(bjts, function(x) window(x, start = start, end = end)))
+  trainM <<- cbind(tsTrain, notstrain)
+  notstest <- bjnots[(endInd+1):nrow(bjnots), ]
+  tsTest  <- data.frame(lapply(bjts, function(x) window(x, start = c(6,8760-47))))
+  testM <<-cbind(tsTest, notstest)
+  trainM[c(7:14)] <<- NULL
+  testM[c(7:14)] <<- NULL
+  trainM$DEWP <<- NULL
+  testM$DEWP <<- NULL
+}
+splitMvar()
+vartrain$DEWP <- NULL
+```
+
+
+## Selecting the order
+
+Next, we must select the order of our VAR forecast:
+
+
+```{r, eval = F}
+ord <- VARselect(vartrain, lag.max = 100, exogen = varexo)
+```
+
+Lets check it out:
+
+```{r}
+data.frame(ord$selection)
+```
+
+Looks like we have three candidate values. First, the AIC value of 78 is clearly too big, that would be overfitting. The BIC/SC and HQ values both appear reasonable. Through trial and error (see analysis/daily/VAR.R), it was found that the HQ order of 30 performed better. This was all validated through a massive grid search of VAR forecasts in `analysis/hourly/VAR.R`, which will not be discussed here
+
+### Prediction
+
+Next we get to finally make our model:
+
+```{r}
+Var <- VAR(vartrain, p = 30, exogen = varexo, type = "both")
+```
+
+Lets confirm our exogenous variable maker works before we use it:
+
+```{r}
+ht <- function(d, m=5, n=m){
+  list(HEAD = head(d,m), TAIL = tail(d,n))
+}
+ht(makeExo(1), 10)
+```
+
+That'll do
+
+```{r}
+varpred <- predict(Var, n.ahead = 72, dumvar = makeExo(3))
+plot(varpred)
+```
+
+We can barely see the prediction, lets zoom in a bit:
+
+```{r}
+varp <- as.var(varpred)
+autoplot(varp)
+```
+And the scores:
+
+```{r}
+data.frame(t(scores(varp)))
+```
+
+This is pretty good, it performed slightly worse than the aruma and harmonic methods, but still much better than the TBATS forecast. It is about the same as the harmonic forecast, but with less variance. Lets move on to the simple `nnetar` model now
+
+# NNETAR
+
+## S3 Methods
+
+```{r}
+
+as.nfor <- function(x) structure(x, class = "nfor")
+
+scores.nfor <- function(obj){
+  mape <- MAPE(obj$mean, testM[[1]])
+  ase <- ASE(obj$mean, testM[[1]])
+  confs <- confScore(upper = obj$upper[,2], lower = obj$lower[,2], testM[[1]])
+  c("ASE" = ase,"MAPE" = mape,  "Conf.Score" = confs)
+}
+autoplot.nfor <- function(obj){
+  testdf <- data.frame(type = "actual", 
+                       t = seq_along(testM[[1]]), 
+                       ppm = as.numeric(testM[[1]]))
+  preddf <- data.frame(type = "predicted", 
+                       t = seq_along(testM[[1]]), 
+                       ppm = as.numeric( obj$mean ))
+  confdf <- data.frame(t = seq_along(testM[[1]]), upper = obj$upper[,2], lower = obj$lower[,2])
+  dfl <- list(testdf,preddf)
+  .testPredPlot(dfl)+ geom_line(data = confdf, aes(x = t, y = lower, alpha = 0.2), 
+         linetype = 3003) + geom_line(data = confdf, aes(x = t, y = upper, alpha = 0.2), 
+         linetype = 3003) + guides(alpha = FALSE)
+}
+```
+
+## Analysis
+
+This is fast and simple. One note, we want to scale our inputs before feeding them in to a neural network, if we have multiple features with different magnitudes. Otherwise, the model will weight the big attributes higher than the little attributes, imbalancing the model. We also again set lambda = 0:
+
+
+```{r, echo = F}
+load("analysis/hourly/nnetar.Rda")
+load("analysis/hourly/nnetfor.Rda")
+```
+
+```{r, eval = F}
+nnet <- nnetar(y = trainM[[1]], xreg = trainM[-1], scale.inputs = TRUE, repeats = 100, lambda = 0)
+```
+
+Lets check out the AR order it chose, as well as the number of lags:
+
+```{r}
+nnet$p
+nnet$lags
+```
+
+
+
+***NOTE*** This will take a few hours. To calculate the confidence interval, it runs the neural net 1000 times.
+
+```{r, eval = F}
+nnetfor <- forecast(nnet, xreg = trainM[(nrow(trainM)-71):nrow(trainM),-1], PI = TRUE)
+```
+
+Lets check out that forecast:
+
+```{r}
+autoplot(nnetfor)
+```
+
+Lets view the forecast with a higher granularity and check out the scores
+
+```{r}
+autoplot(as.nfor(nnetfor))
+scores(as.nfor(nnetfor)) %>% t %>% data.frame
+```
+
+This model is pretty much par for the course. All of them seem to have trouble getting that big peak, other than ARUMA. Lets see if deep learning is the answer to our troubles:
+
+# LSTM
+
+## Data Prep
+First, we must prepare our data:
+
+```{r, echo = F}
+library(keras)
+model_lstm <- load_model_hdf5("analysis/hourly/lstm.h5") 
+load("analysis/hourly/lstmhist.Rda")
+load("analysis/hourly/lstmInt.Rda")
+```
+
+As LSTMs rely on the sigmoid function, which is between zero and one, we must prepare our data accordingly (aka center and scale it). It also has to be in matrix form (for now). We will save our scale values for later as well. In the following chunk, we prepare our dataset, our test values, as well as a validation set for use in the next section.
+
+```{r}
+library(keras)
+
+Ktrain <- data.matrix(trainM)
+Ktest <- data.matrix(testM)
+dat <- rbind(Ktrain,Ktest)
+str(dat)
+nrow(dat)
+x <- nrow(dat)
+mn <- apply(dat,2,mean)
+std <- apply(dat,2,sd)
+# train test split of our dataset
+maxt <- floor( nrow(dat)*4/5 )
+maxv <- floor(nrow(dat))
+val <- dat[(maxv-72*2):( maxv - 72),]
+val <- scale(val, center = apply(val,2,mean), scale = apply(val,2,sd))
+valScale <- attr(val, 'scaled:scale')[1]
+valCent <- attr(val,'scaled:center')[1]
+val <- array(val, c(nrow(val),10,6))
+dat <- scale(dat, center = mn, scale = std)
+test2 <- scale(Ktest, center = apply(Ktest,2,mean), scale = apply(Ktest,2,sd))
+test3  <- array(test2, c(nrow(test2),10,6))
+```
+
+## Sampling
+Next, we want to define a data generator for the LSTM. When we train it, we dont want to feed it our entire dataset over and over again, that will lead to overfitting pretty quickly. Instead, we are going to do `rolling origin resamples`. How this will work is we will write a generator function, which pulls from our dataset a certain number of observations, samples a certain number of observations from that, and compares observations a certain number of steps ahead. It will do this a certain number of times per epoch. The values are defined as follows:
+
+* lookback: How many timesteps back we sample
+
+* delay: How far forward our targets are
+
+* steps: The number of timesteps between samples
+
+* batch size: The number of times you sample per movement of our sliding window.
+
+We will first define a function to produce data generator functions, as we will need one for both our test and validation sets. All this code is based off code from `deep learning with R` (the book)
+
+```{r}
+generator <- function(data, lookback, delay, min_index, max_index,
+                      shuffle = FALSE, batch_size = 128, step = 6) {
+  if (is.null(max_index))
+    max_index <- nrow(data) - delay - 1
+  i <- min_index + lookback
+  function() {
+    if (shuffle) {
+      rows <- sample(c((min_index+lookback):max_index), size = batch_size)
+    } else {
+      if (i + batch_size >= max_index)
+        i <<- min_index + lookback
+      rows <- c(i:min(i+batch_size-1, max_index))
+      i <<- i + length(rows)
+    }
+
+    samples <- array(0, dim = c(length(rows),
+                                lookback / step,
+                                dim(data)[[-1]]))
+    targets <- array(0, dim = c(length(rows)))
+                      
+    for (j in 1:length(rows)) {
+      indices <- seq(rows[[j]] - lookback, rows[[j]]-1,
+                     length.out = dim(samples)[[2]])
+      samples[j,,] <- data[indices,]
+      targets[[j]] <- data[rows[[j]] + delay,2]
+    }           
+    list(samples, targets)
+  }
+}
+```
+
+Next lets define our lookback and steps etc:
+
+```{r}
+lookback  <- 60*24 # look back 60 days
+step <- 6*24 # samle one data point every 6 days
+delay  <- 1*24 # look forward one day
+batch_size <- 150*24 # Do this 3600 times, in other sample each window 2.5 times
+```
+
+Next lets define our training and validation generators
+
+```{r}
+train_gen <- generator(
+  dat,
+  lookback = lookback,
+  delay = delay,
+  min_index = 1,
+  max_index = maxt,
+  shuffle = TRUE,
+  step = step, 
+  batch_size = batch_size
+)
+
+val_gen = generator(
+  dat,
+  lookback = lookback,
+  delay = delay,
+  min_index = maxt+1,
+  max_index = maxv,
+  step = step,
+  batch_size = batch_size
+)
+
+# How many steps to draw from val_gen in order to see the entire validation set
+val_steps <- ((maxv - maxt+1 - lookback) / batch_size)
+```
+
+## Model building
+
+Finally, we can define our model. Note what we did with the dropout. Dropout basically does exactly what it sounds like, when we are training our model, `n` percent of our data points that go in are randomly dropped, in the input an output nodes of each layer. This prevents the model from seeing too much of our training set, preventing overfitting. When predicting and running on our validation set, dropout is removed, as those are less data. This is why when we look at our loss curves in a moment, we see that the validation curve is lower than the train curve. Recurrent dropout is the same thing, except it occurs in the hidden layer, also preventing overfitting inthe LSTMs famous `forget gate`. We use the sigmoid activation function because it is most appropriate for time series data, especially our dataset.
+
+```{r, eval = F}
+
+model_lstm <- keras_model_sequential() %>%
+  layer_lstm(units = 10, dropout = 0.1, recurrent_dropout = 0.1, 
+             activation = "sigmoid",
+             input_shape = list(NULL, dim(dat)[[-1]])
+                             ,return_sequences = TRUE
+              ) %>%
+bidirectional(layer_lstm(units = 40,  dropout = 0.1, recurrent_dropout = 0.1,
+            activation = "sigmoid", return_sequences = TRUE)) %>%
+bidirectional(layer_lstm(units = 80,  dropout = 0.1, recurrent_dropout = 0.1,
+            activation = "sigmoid")) %>%
+  layer_dense(units = 1)
+```
+
+
+Next, we need to compile the model, or define how it trains. We will want to train it to optimize ASE, as we have been using that metric on the rest of the models. For our optimizing method, we will use `rmsprop`. To learn how RMSprop works, please see[this link](https://blog.paperspace.com/intro-to-optimization-momentum-rmsprop-adam/). It is typically a good optimizer for RNNs. We set the learning rate to 0.001 (chosen with great trial and error).
+
+
+```{r, eval = F}
+model_lstm %>% compile(
+  optimizer = optimizer_rmsprop(lr = 0.001),
+  loss = "mse"
+)
+```
+
+Finally, we get to train our model:
+
+
+```{r, eval = F}
+Lhist <- model_lstm %>% fit_generator(
+  train_gen,
+  steps_per_epoch = 40,
+  epochs = 40,
+  validation_data = val_gen,
+  validation_steps = val_steps
+)
+```
+
+## Model Diagnostics
+
+Lets look at our history to diagnose our model
+
+```{r}
+plot(Lhist)
+```
+
+There are two things to know about the loss curve:
+
+1. If the validation loss is greater than training loss, you are severly overfitting.
+
+2. If the loss is too steep, learning rate is too high. If it is too flat, the learning rate is too low
+
+For an amazing guide about tuning this, please refer to [this link](http://cs231n.github.io/neural-networks-3/#baby)
+
+Knowing this, lets evaluate ours. It is apparent we are not overfitting. The loss curve is a little steeper than desirable, but it is definitely acceptable, and this is the best result of at least 1000 models. I also tried adding convolutional layers at the beginning, which is done frequently in related literature, as a tool for feature extraction, but we do not have near enough data (features) for that to work and overfit immediately. This model is a good balance of fast learning rate and not overfitting, and it is nice and stable.
+
+## Prediction
+
+
+As with the NNETAR, there is no explicit way of calculting the prediction interval of an LSTM, as it is not a stochastic, parametric tool, it is simply a composition of lots of functions.
+However, we can use our dropout to approximate a prediction interval. For an in depth explanation, please refer to [this paper](https://arxiv.org/pdf/1506.02142.pdf). Basically, dropout is a random process. So each time we run our model on the training set, with our dropout, and our random generator function, we will get slightly different results (whereas when we make a prediction, we will not have the dropout, so it will be the same result every time). So, what we can do, is we can evaluate how well our model represents the training set, and use that to calculte a prediction interval. First, we will write a function that gets the mean error of our model over the training set:
+
+```{r, echo = F}
+load("analysis/hourly/trainErr.Rda")
+```
+
+```{r, eval = F}
+getMeanError <- function(mod) {
+    # 28 is simply the integer number of times we need to sample from our
+    # training set to represent the whole thing.  In this case it will run
+    # through the entire set 4 times
+    sqerror <- evaluate_generator(mod, train_gen, 28)
+    return(sqrt(sqerror))
+}
+GetErrors <- function(n) {
+    errors <- double(n)
+    for (i in seq_along(errors)) {
+        cat("evaluation number", i, "\n")
+        errors[i] <- getMeanError(model_lstm)
+    }
+    return(errors)
+}
+trainErr <- GetErrors(1000)
+
+errorMean <- mean((trainErr))
+errorStd <- sd((trainErr))
+
+makeInterval <- function(prediction){
+  pm <- errorMean+errorStd
+  upper <- prediction + pm
+  lower  <- prediction - pm
+  return(data.frame(fitted = prediction, upper = upper, lower = lower))
+}
+```
+
+Now we can define scoring methods and autoplot methods:
+
+## S3 Methods
+
+```{r}
+
+as.keras <- function(x) structure(x, class = "keras")
+autoplot.keras <- function(obj) {
+    testdf <- data.frame(type = "actual", t = seq_along(testM[, 1]), ppm = as.numeric(testM[,1]))
+    preddf <- data.frame(type = "predicted", t = seq_along(testM[, 1]), ppm = as.numeric(obj$fitted))
+    confdf <- data.frame(t = seq_along(testM[, 1]), upper = obj$upper, lower = obj$lower)
+    dfl <- list(testdf, preddf)
+    .testPredPlot(dfl) + geom_line(data = confdf, aes(x = t, y = lower, alpha = 0.2), 
+        linetype = 3003) + geom_line(data = confdf, aes(x = t, y = upper, alpha = 0.2), 
+        linetype = 3003) + guides(alpha = FALSE)
+}
+scores.keras <- function(obj) {
+    c(ase = ASE(obj$fitted, testM[, 1]), mape = MAPE(obj$fitted, testM[, 1]), 
+        Conf.Score = confScore(upper = obj$upper, lower = obj$lower, testM[,1]))
+}
+```
+
+Next, lets make predictions:
+
+```{r, eval = F}
+
+lstmTest <- predict(model_lstm, test3, n.ahead = nrow(test2))
+lstmTest <- makeInterval(lstmTest)
+descaleTest <- function(x){
+  x*attr(test2, 'scaled:scale')[1] + attr(test2, 'scaled:center')[1]
+}
+lstmTest <- lapply(lstmTest, descaleTest)
+```
+
+## Evaluation
+
+```{r}
+autoplot(as.keras(lstmTest))
+data.frame(t(scores(as.keras(lstmTest))))
+```
+
+This is an insanely good model. The hard work seriously paid off. It nearly matches the test set.
+
+Lets go ahead and make a forecast on the validation (secondary training set) for our next model:
+
+```{r, eval = F}
+lstmVal <- predict(model_lstm, val, n.ahead = nrow(test2))
+lstmVal <- lstmVal*valScale + valCent
+lstmVal <- as.keras(lstmVal)
+```
+
+# Ensembling
+
+We will now walk through the setup of our ensemble model. We are going to make forecasts on the 72 hours ***BEFORE*** our test set (after retraining models that need to be retrained), and then train our gradient boosting machine on that. Then, we are going to feed our predictions on the test set into the gradient boosted model to assess. This type of ensembling is known as ***stacked ensembling***
+
+## Data setup
+
+```{r}
+library(magrittr)
+N <- nrow(trainM)
+n <- 72
+
+# set up a df to train our model on
+valdf <- data.frame(ppm = trainM[(N-n+1):(N),1])
+nrow(valdf)
+
+# set up the validation set data frame, all the data up to the last 144 observations
+# Note this is with trainM
+valstack <- trainM[1:(N-n),]
+valstack <- trainM[1:(N-n),]
+
+nrow(valstack)  - nrow(trainM)
+
+# make the columns a time series that need to be
+ncol(valstack)
+valstack[,1:5] %<>% lapply(function(x) ts(x,frequency = 8760))
+str(valstack)
+
+# create our test set
+teststack <- data.frame(ppm = as.numeric(testM$PM))
+```
+
+Next, we make a tswge forecast on our validation set:
+
+```{r}
+teststack$ARUMA <- seafor$f
+valwge <- fcst(
+               type = aruma, 
+               x = valstack[[1]],
+               theta = 0,
+               s = 24*7,
+               n.ahead = 72,
+               phi = est7$phi, 
+               plot = FALSE
+)
+valdf$ARUMA <- valwge$f
+
+plot(valdf[[1]], type = "l")
+lines(valdf[[2]], col = "blue")
+```
+
+Looks like tswge is still doing a good job, its got the shape down, but in this case it is a bit too high. This is the probably overfitting we did showing. Lets do nnetar next:
+
+```{r}
+teststack$nnet <-  nnetfor$mean
+newnet <- nnetar(model = nnet, y = valstack[[1]], xreg = valstack[-1])
+netval <- forecast(newnet, xreg = valstack[(N-2*n+1):(nrow(valstack)),-1])
+valdf$nnet <- netval$mean
+plot(valdf[[1]], type = "l")
+lines(as.numeric(netval$mean), col = "red")
+```
+
+This is an excellent model.
+
+Next, lets setup VAR
+
+```{r}
+teststack$VAR <- opred$fcst$PM_US.Post[,1]
+valVar <-  VAR(valstack[-6], exogen = matrix(valstack[[6]], dimnames = list(NULL, "dayNight")), type = "both", p = 30)
+valVarP <- predict(valVar, n.ahead = 72, dumvar = makeExo(3))
+valdf$VAR <- valVarP$fcst$PM_US.Post[,1]
+plot(valdf[[1]], type = "l")
+lines(valdf$VAR, col = "blue")
+```
+
+This is another good forecast, not as good as nnetar but still solid.
+
+Next, it is time for tbats
+
+```{r}
+teststack$TBATS <- as.numeric(batF$mean)
+valbat <- tbats(model = bjbats,y = msts(valstack$PM, seasonal.periods = c(24,24*7,8760)) )
+valbatfor <- forecast(valbat, h = 72)
+valdf$TBATS <- valbatfor$mean
+
+plot(valdf[[1]], type = "l")
+lines(as.numeric(valdf$TBATS), col = "red")
+```
+
+Another solid fit.
+
+Lets try our other multiseasonal series next:
+
+```{r}
+teststack$harmonic <- mseasFor$mean
+expansion3 <- fourier(msts(valstack$PM, seasonal.periods = c(24,24*7,8760)), K = c(10,20,100))
+
+mseaval <- Arima(model = mseaDay, y = msts(valstack$PM, seasonal.periods = c(24,24*7,8760)), xreg = expansion3)
+mseavalF <- forecast(mseaval, xreg = fourier(msts(valdf$ppm, seasonal.periods = c(24,24*7, 8760)), K = c(10,20,100)))
+valdf$harmonic <- mseavalF$mean
+
+
+plot(valdf[[1]], type = "l")
+lines(as.numeric(valdf$harmonic), col = "blue")
+```
+
+Interesting. This took a different approach, and should help balance out our models.
+
+Finally, lets look at the LSTM
+
+```{r}
+valdf$LSTM <- lstmVal[-1]
+teststack$LSTM <- lstmTest$f
+
+plot(valdf[[1]], type = "l")
+lines(as.numeric(valdf$LSTM), col = "red")
+```
+
+This is an absurdly good model, and apparently not overfit.
+
+Next, lets view all of the models in one plot:
+
+```{r}
+valdf %<>% lapply(as.numeric) %>% data.frame
+teststack %<>% lapply(as.numeric) %>% data.frame
+plot(valdf[[1]], t = "l")
+lines(valdf[[2]], col = "red")
+lines(valdf[[3]], col = "blue")
+lines(valdf[[4]], col = "green")
+lines(valdf[[5]], col = "purple")
+lines(valdf[[6]], col = "orange")
+lines(valdf[[7]], col = "turquoise")
+legend(60,500, legend = names(valdf), col = c("black","red","blue","green","purple","orange","turquoise"), lty = 1:7)
+```
+
+We have an ensemble of awesome forecasts.
+
+## Ensembling
+
+### S3 methods and Helper functions
+
+Along with our standard S3 methods, we will make a function to help us quickly evaluate predictions:
+
+```{r}
+as.ens <- function(x) structure(x, class = "ens")
+scores.ens <- function(obj){
+   ase <- ASE(obj, teststack[[1]])
+   mape <- MAPE(obj, teststack[[1]])
+   c("ASE" = ase, "MAPE" = mape)
+ }
+
+testModel <- function(model, ...){
+  scores(as.ens(predict(model,... ,newdata = teststack)))
+}
+```
+
+### Baseline Mean
+
+If we cant do better than the common sense mean of all models, what are we doing?
+
+```{r}
+modmean <- rowMeans(teststack[-1])
+scores(as.ens(modmean))
+```
+
+Already, this is a very good model, on par if not better than the LSTM. Lets plot it
+
+```{r}
+plot(teststack[[1]], t = "l")
+lines(modmean, col = "blue")
+```
+
+This is by no means a bad model, in fact its our best yet, but we can do better.
+
+### Gradient Boosting: Feature Selection
+
+We will try different combinations of features to see which ones are the most important. I have a feeling ARUMA is going to have to go.
+
+```{r}
+set.seed(503) # for reproducibility
+library(gbm)
+b1 <- gbm(ppm~., data = valdf )
+testModel(b1, n.trees = 100)
+```
+
+Already we beat the baseline mean by a lot, lets see if we can drive it down even further:
+
+```{r}
+valdf2 <- valdf %>% dplyr::select(-ARUMA)
+
+set.seed(503) # for reproducibility
+b2 <- gbm(ppm~., data = valdf2)
+testModel(b2, n.trees = 100)
+```
+
+Wow, we have now broken the 10,000 mark. Lets next do a grid search, in order to optimize our model. First, lets set up our grid:
+
+```{r}
+n.trees <- 100*(1:10)
+interaction.depth  <-  1:6
+shrinkage <- 10^(-(1:3))
+gbmGrid <- expand.grid(list(n.trees, interaction.depth, shrinkage))
+```
+
+Then lets do the grid search (note this is super quick)
+
+```{r}
+search <-  foreach(g = 1:nrow(gbmGrid),.combine = rbind) %do% {
+  set.seed(503)
+  model <- gbm(
+               ppm ~ ., 
+               data = valdf2, 
+               n.trees = gbmGrid[g,1], 
+               interaction.depth = gbmGrid[g,2], 
+               shrinkage = gbmGrid[g,3],distribution ="gaussian"  
+  )
+  score <- testModel(model, n.trees = gbmGrid[g,1])
+  return(data.frame(
+                    ASE = score[1],
+                    MAPE = score[2],
+                    n.trees = gbmGrid[g,1],
+                    interaction.depth = gbmGrid[g,2],
+                    shrinkage = gbmGrid[g,3]
+                    ))
+  }
+```
+
+Lets view the results:
+
+```{r}
+search %>% as_tibble %>% arrange(ASE)  
+```
+
+These are absurd models. We more than halved our mean ensemble. Lets go ahead and implement this new model:
+
+```{r}
+set.seed(503)
+finalModel <- gbm(ppm~., data = valdf2, n.trees = 700, interaction.depth = 2,distribution = "gaussian")
+testModel(finalModel, n.trees = 700)
+plot(teststack$ppm, type = "l")
+lines(predict(finalModel, newdata = teststack, n.trees = 700), col = "blue")
+finalPred <- predict(finalModel, newdata = teststack, n.trees = 700)
+scores(as.ens(finalPred))
+```
+
+Oh man...
+This is an incredible model. Next, lets calculate a prediction interval. For this, we will run it 10000 times and bootstrap the residuals. Because forecasts get worse with time, we will then order them sequentially (I am making a lot assumptions here). Because we included 5 models here, and each of those have uncertainty too, lets assume (generously) that we will have 5 times the uncertainty in our ensembled model:
+
+```{r}
+load("analysis/hourly/pint.Rda")
+```
+
+```{r, eval = F}
+library(boot)
+set.seed(NULL)
+
+bootfun <- function(data, indices) {
+  data <- data[indices,]
+  tr <- gbm(ppm~., data = data, n.trees = 700, interaction.depth = 2,distribution = "gaussian")
+  predict(tr, newdata = teststack, n.trees = 700)
+}
+
+# bootstrap residuals
+b <- boot(data = valdf2, statistic = bootfun, R = 10000, parallel = "multicore")
+# 95% limits
+lims <- t(apply(b$t, 2, FUN = function(x) quantile(x, c(0.05, 0.975))))
+# order them
+pm <- (lims[,2]-lims[,1])[order(lims[,2]-lims[,1])]/2
+```
+
+Again because we have 5 models, lets say theres 5 times the uncertainty. This is safe enough for me, although it assumes a lot
+
+```{r}
+pm <- pm*(ncol(valdf2)-1)
+makeInterval <- function(x){
+  upper <- x + pm
+  lower <- x - pm
+  return(data.frame(predicted = x, upper = upper, lower = lower))
+}
+```
+
+Now lets make an interval on our prediction:
+
+```{r}
+finalPred <- makeInterval(finalPred)
+```
+
+And final S3 methods update:
+
+```{r}
+autoplot.ens <- function(obj) {
+    testdf <- data.frame(type = "actual", t = seq_along(testM[, 1]), ppm = as.numeric(testM[,1]))
+    preddf <- data.frame(type = "predicted", t = seq_along(testM[, 1]), ppm = as.numeric(obj$predicted))
+    confdf <- data.frame(t = seq_along(testM[, 1]), upper = obj$upper, lower = obj$lower)
+    dfl <- list(testdf, preddf)
+    .testPredPlot(dfl) + geom_line(data = confdf, aes(x = t, y = lower, alpha = 0.2), 
+        linetype = 3003) + geom_line(data = confdf, aes(x = t, y = upper, alpha = 0.2), 
+        linetype = 3003) + guides(alpha = FALSE)
+}
+scores.ens <- function(obj) {
+    c(ase = ASE(obj$predicted, testM[, 1]), mape = MAPE(obj$predicted, testM[, 1]), 
+        Conf.Score = confScore(upper = obj$upper, lower = obj$lower, testM[,1]))
+}
+```
+
+## Assessing the model
+
+```{r}
+autoplot(as.ens(finalPred))
+scores(as.ens(finalPred)) %>% t %>% data.frame
+```
+
+Well, this is a miraculous model. There is not much left to say. Lets now forecast *into the future*
+
+# Forecasting
+
+We will now make 72 hour ahead predictions of PM2.5 content in Beijing.
+
+First, lets get rid of that train test split and have our whole dataset, and transform it just as we had in the previous sections
+
+```{r}
+processData <- function(){
+  bjnots <- purrr::discard(bj, is.ts)
+  bjnots <- data.frame(lapply(bjnots, as.factor))
+  bjts <- purrr::keep(bj, is.ts)
+  bjts$PM_US.Post <- uvar # just because it is already cleaned
+  alldata <<- cbind(bjts, bjnots)
+}
+
+processData()
+str(alldata)
+alldata$dayNight <- hoursToDayNight(alldata)
+
+alldata[c(7:14)] <- NULL
+alldata$DEWP <- NULL
+```
+
+## VAR
+
+Next, lets make the VAR forecast, so we have all our exogenous predictors.
+
+```{r}
+varmod <-  VAR(alldata[-6], exogen = matrix(alldata[[6]], dimnames = list(NULL, "dayNight")), type = "both", p = 30)
+varpred <- predict(varmod, n.ahead = 72, dumvar = makeExo(3))
+
+# make an xvar data frame
+xvars <- rapply(varpred$fcst, function(x) x[,1], how = "list") %>% 
+  data.frame %>% dplyr::select(-PM_US.Post) 
+xvars$dayNight <- c(makeExo(3))
+predictions <- data.frame(VAR = varpred$fcst$PM[,1])
+```
+
+## Classical
+
+Next, lets use tswge to make an ARUMA forecast (this is still important)
+
+```{r}
+aruma <- fore.aruma.wge(
+               x = alldata[[1]],
+               theta = 0,
+               s = 24*7,
+               n.ahead = 72,
+               phi = est7$phi, 
+               plot = FALSE
+)$f
+predictions$ARUMA <- aruma
+```
+
+## Autocorrelated errors
+
+```{r}
+expansion3 <- fourier(msts(alldata$PM, seasonal.periods = c(24,24*7,8760)), K = c(10,20,100))
+
+mseamod <- Arima(model = mseaDay, y = msts(alldata$PM, seasonal.periods = c(24,24*7,8760)), xreg = expansion3)
+
+
+harmonF <- forecast(mseamod, xreg = fourier(msts(tail(alldata$PM,72), seasonal.periods = c(24,24*7, 8760)), K = c(10,20,100)))
+
+predictions$harmonic  <- harmonF$mean
+```
+
+## TBATS
+
+```{r}
+
+tbatmod <- tbats(model = bjbats,y = msts(alldata$PM, seasonal.periods = c(24,24*7,8760)) )
+batfor <- forecast(tbatmod, h = 72)
+
+predictions$TBATS <- batfor$mean
+
+```
+
+## NNETAR
+
+```{r}
+newnet <- nnetar(model = nnet, y = alldata[[1]], xreg = alldata[-1])
+netfor <- forecast(newnet, xreg = xvars)
+
+predictions$nnet <- netfor$mean
+```
+
+## LSTM
+
+This one is tricky. LSTM requires us to put a target variable into it, because it csn only accept arrays of that shape. The first column of the array is our target set, which does not affect the prediction. We could put only zeroes there and it would be fine. However, we need to pick something with a good scale. For that, the standard deviation of our ARUMA forecasts was very good relative to our real data. So we will use that as our scaling variable:
+
+```{r}
+input <- data.matrix(data.frame(aruma, xvars))
+# data setup
+input <- scale(input, center = apply(input,2,mean), scale = apply(input,2,sd))
+inputScale <- attr(input, 'scaled:scale')[1]
+inputCent <- attr(input,'scaled:center')[1]
+# descaler
+descaleInput <- function(x){
+  x*inputScale + inputCent 
+}
+# to array
+input <- array(input, c(nrow(input),10,6))
+lstmPred <- predict(model_lstm, input, n.ahead = 72)
+lstmPred <- descaleInput(lstmPred)
+predictions$LSTM <- lstmPred
+```
+
+## Ensembling
+
+Lets combine our forecasts: 
+```{r}
+futuresight <- predict(finalModel, newdata = predictions, n.trees = 700) 
+futuresight <- makeInterval(futuresight)
+plot(futuresight$predicted, type = "o")
+lines(futuresight$upper, type = "b", col = "blue")
+lines(futuresight$lower, type = "b", col = "blue")
+```
+
+looks like the shape is on point. Lets plot a few days back so we can see if weve made a realistic forecast:
+
+```{r}
+numbah <- 72*2
+past <- as.numeric(tail(alldata$PM, numbah))
+tAdd <- length(past)
+library(lubridate)
+library(stringr)
+
+# convert month, day, and hour columns to date
+col2date <- function(v){
+  v <- as.character(v)
+  v %<>% vapply(function(x) str_pad(x,2, pad = "0"), character(1))
+  dte <- paste(v[1],v[2],v[3], sep = "-")
+  tme <- paste0(v[4],":00:00")
+  dtme <- paste(dte,tme)
+  as_datetime(dtme)
+}
+  
+start <- tail(bj[1:4], tAdd) %>% head(1) %>% col2date
+pastdates <- start + hours(x = seq.int(0,tAdd-1))
+futuredates <- tail(pastdates,1) + hours(x = seq.int(1, 72))
+
+pastdf <- data.frame(time = pastdates, PM2.5 = past)
+futuredf <- data.frame(time = futuredates, futuresight)
+models <- data.frame(time = futuredates, predictions)
+modeldf <- models %>% gather_(key = "model", value = "value", gather_cols = names(models)[-1])
+connectdf <- data.frame(
+                        time = c(tail(pastdf$time,1), head(futuredf$time,1)), 
+                        val = c(tail(pastdf$PM2.5,1), head(futuredf$predicted,1)))
+library(ggthemes)
+ggplot() + 
+  geom_line(data = pastdf, aes(x = time, y = PM2.5), color = "black") +
+  geom_line(data = futuredf, aes(x = time, y = predicted), color = "blue") +
+  geom_line(data = futuredf, aes(x = time, y = upper), linetype = 3003)+ 
+  geom_line(data = futuredf, aes(x = time, y = lower), linetype = 3003) +
+  geom_line(data = connectdf, aes(x = time, y = val), color = "blue") + 
+  geom_ribbon(data = futuredf, aes(x = time,ymin = lower, ymax = upper), alpha = 0.1)+
+  theme_hc() + scale_color_calc()+
+  ggtitle("Gradient Boosted Ensemble Forecast of PM2.5 in Beijing")+
+  theme(plot.title = element_text(hjust = 0.5))
+```
+
+And there we go :)
+Last but no least, lets write our forecast to a csv:
+
+```{r}
+write.csv(futuredf, "predictions.csv")
+```
+
+

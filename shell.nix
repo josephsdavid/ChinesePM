@@ -7,11 +7,20 @@ in
     buildInputs = with pkgs; [
       R
       python37
+      rPackages.qrnn
+      rPackages.boot
+      rPackages.nnet
+      rPackages.extraTrees
       rPackages.RCurl
+      rPackages.gghighlight
+      rPackages.ggfocus
+      rPackages.xgboost
+      rPackages.devtools
       rPackages.gbm
       rPackages.codetools
       rPackages.tidyverse
       rPackages.remotes
+      rPackages.skimr
       rPackages.httpuv
       rstudio
       vscode
@@ -33,6 +42,7 @@ in
       rPackages.Mcomp
       rPackages.ggplot2
       rPackages.data_table
+      glibc
       rPackages.knitr
       rPackages.latticeExtra
       rPackages.reticulate
@@ -62,12 +72,12 @@ in
       texlive.combined.scheme-full
       python37Packages.pandas
       rPackages.imputeTS
-      rPackages.tensorflow
+      #rPackages.tensorflow
       rPackages.keras
       rPackages.FNN
       rPackages.fastNaiveBayes
-      #python37Packages.tensorflowWithCuda
-      python37Packages.tensorflow
+      python37Packages.tensorflowWithCuda
+      #python37Packages.tensorflow
       python37Packages.tensorflow-tensorboard
       python37Packages.Keras
       python37Packages.pip

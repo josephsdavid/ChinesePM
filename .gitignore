@@ -4,3 +4,9 @@ data/old/
 pres/*.html
 pres/fig/
 pres/report_cache/
+publish.R
+nfor.Rda
+pres/reportDaily_cache/
+pres/reportDaily.html
+analysis/hourly/walkthrough_cache/
+analysis/hourly/*.html
