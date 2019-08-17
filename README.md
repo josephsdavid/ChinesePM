@@ -53,7 +53,7 @@ Stochastic gradient boosting machine was trained on the validation forecasts, an
 
 # Predicting the future
 
-![](analysis/hourly/unnamed-chunk-105-2.png)
+![](analysis/hourly/fig/unnamed-chunk-105-2.png)
 
 72 hour ahead forecasts were made using this model. To make each prediction, in the case of the multivariate models, each of the covariates were also forecasted. The prediction limits were calculated by bootstrapping the residuals of the final model and accounting for the fact that it contains several models, each with their own prediction limits.
 
