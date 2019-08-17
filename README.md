@@ -20,6 +20,8 @@ Soon to be expanded to the rest of china. Analysis methods included
 
 All hyperparamters for each individual model were tuned with a combination of experience, trial and error, and hours of grid searches.
 
+The majority of the final model, and the actually good code in [analysis/hourly](analysis/hourly). In the daily section you will find mostly poorly done experiments
+
 ## The Final Model
 
 The final model consists of 6 parts, in two layers, and is set to make three-day-ahead forecasts of hourly data from Beijing:
