@@ -68,17 +68,8 @@ Stochastic gradient boosting machine was trained on the validation forecasts, an
 You are on your own as far as setting up a deep learning stack and connecting it to R. To grab all R dependencies (some of which may require more setup), run [noNix.R](noNix.R)
 
 
-# Contents
-## To do list
+# Future Work
 
-- [x] preprocessing
-- [x] EDA
-- [x] Classical Univariate analysis
-- [x] Multiseasonal Univariate analysis 
-- [x] Multivariate analysis
-- [x] clustering
-- [x] LSTM
-- [x] ANN
-- [x] prophet
-- [x] Ensemble forecast
-- [ ] write paper
+- [ ] Make models dynamic
+- [ ] Extend to every city I have data on
+- [ ] Deploy model with dash app
